@@ -1,26 +1,32 @@
 # -- Stage 1: Build frontend --
-FROM node:20-alpine AS frontend-build
+FROM node:20-slim AS frontend-build
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci
+COPY frontend/package.json ./
+RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
 # -- Stage 2: Build backend --
-FROM node:20-alpine AS backend-build
+FROM node:20-slim AS backend-build
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/backend
-COPY backend/package.json backend/package-lock.json* ./
-RUN npm ci
+COPY backend/package.json ./
+RUN npm install
 COPY backend/ ./
 RUN npm run build
 
-# -- Stage 3: Production --
-FROM node:20-alpine
+# -- Stage 3: Install production deps (with build tools for native modules) --
+FROM node:20-slim AS prod-deps
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY backend/package.json ./
+RUN npm install --omit=dev
+
+# -- Stage 4: Production (clean, no build tools) --
+FROM node:20-slim
 WORKDIR /app
 
-COPY backend/package.json backend/package-lock.json* ./
-RUN npm ci --omit=dev
-
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=backend-build /app/backend/dist ./dist
 COPY --from=frontend-build /app/frontend/dist ./public
 
