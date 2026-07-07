@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm view *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('binary', 'no binary field'\\)\\); print\\('engines:', d.get\\('engines',''\\)\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(curl -s http://localhost:3001/health)",
+      "Bash(node --check src/services/queueService.js)",
+      "Bash(node --check src/routes/queue.js)",
+      "Bash(node --check src/routes/index.js)",
+      "Bash(node *)"
+    ]
+  }
+}

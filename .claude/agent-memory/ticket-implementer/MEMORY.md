@@ -1,0 +1,1 @@
+- [VibeQueue scaffold state](project_vibequeue_scaffold.md) — Ticket #1 done; better-sqlite3 must be ^12.11.1 for Node 24 prebuilts

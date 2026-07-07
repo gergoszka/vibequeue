@@ -1,0 +1,1 @@
+- [VibeQueue Project](project_vibequeue.md) — Party music queue app, 24 tickets across 7 phases, React/Vite + Node/Express + SQLite + YouTube OAuth + WebSocket

@@ -1,0 +1,25 @@
+app = "vibequeue-staging"
+primary_region = "waw"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3001"
+  DATA_DIR = "/data"
+  FRONTEND_URL = "https://vibequeue-staging.fly.dev"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[mounts]
+  source = "vibequeue_data"
+  destination = "/data"
