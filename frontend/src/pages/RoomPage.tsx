@@ -4,6 +4,7 @@ import { useRoom } from '../contexts/RoomContext';
 import { RoomProvider } from '../contexts/RoomContext';
 import { useApi } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { API_BASE } from '../config';
 import Layout from '../components/Layout';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
@@ -92,7 +93,7 @@ function RoomPageInner() {
       // Best-effort beacon to update last_activity_at
       if (room?.code) {
         navigator.sendBeacon(
-          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/rooms/${room.code}/heartbeat`
+          `${API_BASE}/api/rooms/${room.code}/heartbeat`
         );
       }
       return e.returnValue;

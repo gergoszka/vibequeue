@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+import { API_BASE } from '../config';
 
 interface AuthContextValue {
   isAuthenticated: boolean;

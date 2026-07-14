@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { WsStatus } from '../types';
-
-const WS_URL = import.meta.env.VITE_WS_URL || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+import { API_BASE, WS_URL } from '../config';
 const MAX_RETRIES = 5;
 
 interface UseWebSocketProps {
@@ -37,7 +36,7 @@ export function useWebSocket({ roomCode, onQueueUpdated, onNowPlaying, onRoomClo
     if (!sessionIdRef.current) {
       try {
         const res = await fetch(
-          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'}/api/auth/me`,
+          `${API_BASE}/api/auth/me`,
           { credentials: 'include' }
         );
         const data = await res.json() as { sessionId?: string };

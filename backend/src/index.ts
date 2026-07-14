@@ -16,6 +16,11 @@ import { AppError } from './types';
 const app = express();
 const PORT: string | number = process.env.PORT || 3001;
 
+// Trust reverse proxy (Fly.io) so secure cookies work behind TLS termination
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // Middleware: cors → json body parser → session
 app.use(corsMiddleware);
 app.use(express.json({ limit: '100kb' }));

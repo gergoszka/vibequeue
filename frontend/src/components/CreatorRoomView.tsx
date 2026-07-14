@@ -5,8 +5,7 @@ import { useYoutubePlayer } from '../hooks/useYoutubePlayer';
 import QueueDisplay from './QueueDisplay';
 import SearchPanel from './SearchPanel';
 import CreatorControls from './CreatorControls';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+import { API_BASE } from '../config';
 
 export default function CreatorRoomView() {
   const { room, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch } = useRoom();
