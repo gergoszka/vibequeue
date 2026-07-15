@@ -1,3 +1,5 @@
+import { db } from '../db';
+
 if (!process.env.YOUTUBE_CLIENT_ID) {
   console.warn(
     '[authService] WARNING: YOUTUBE_CLIENT_ID is not set. YouTube OAuth will not function.'
@@ -34,7 +36,7 @@ export function buildAuthUrl({ redirectUri, state }: { redirectUri: string; stat
     response_type: 'code',
     scope: YOUTUBE_SCOPE,
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'select_account',
   });
 
   if (state !== undefined && state !== null) {
@@ -145,6 +147,19 @@ export async function refreshAccessToken(refreshToken: string): Promise<{ access
 export function isTokenExpired(expiryDate: number | null): boolean {
   if (expiryDate === null) return false; // unknown expiry — assume valid
   return expiryDate - EXPIRY_BUFFER_MS < Date.now();
+}
+
+export function storeRefreshToken(email: string, refreshToken: string): void {
+  db.prepare(
+    'INSERT INTO user_refresh_tokens (email, refresh_token, updated_at) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET refresh_token = excluded.refresh_token, updated_at = excluded.updated_at'
+  ).run(email, refreshToken, Date.now());
+}
+
+export function getStoredRefreshToken(email: string): string | null {
+  const row = db
+    .prepare('SELECT refresh_token FROM user_refresh_tokens WHERE email = ?')
+    .get(email) as { refresh_token: string } | undefined;
+  return row?.refresh_token ?? null;
 }
 
 /**

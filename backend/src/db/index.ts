@@ -14,6 +14,12 @@ db.pragma('foreign_keys = ON');
 
 // Create tables
 db.exec(`
+  CREATE TABLE IF NOT EXISTS user_refresh_tokens (
+    email TEXT PRIMARY KEY,
+    refresh_token TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS rooms (
     id TEXT PRIMARY KEY,
     code TEXT UNIQUE NOT NULL,

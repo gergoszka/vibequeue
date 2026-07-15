@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { buildAuthUrl, exchangeCode, getUserEmail, refreshAccessToken, isTokenExpired } from '../services/authService';
+import { buildAuthUrl, exchangeCode, getUserEmail, refreshAccessToken, isTokenExpired, storeRefreshToken, getStoredRefreshToken } from '../services/authService';
 
 const router = express.Router();
 
@@ -55,9 +55,16 @@ router.post('/youtube/callback', async (req: Request, res: Response, next: NextF
       return;
     }
 
+    let refreshToken = tokens.refresh_token;
+    if (refreshToken) {
+      storeRefreshToken(email, refreshToken);
+    } else {
+      refreshToken = getStoredRefreshToken(email);
+    }
+
     req.session.youtube = {
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
+      refreshToken,
       expiryDate: tokens.expiry_date,
       email,
     };
