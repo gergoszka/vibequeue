@@ -4,17 +4,23 @@ import { createRoom, joinRoom, getRoom, endRoom, isCreator } from '../services/r
 import { startTokenScheduler } from '../services/tokenService';
 import { loadPlaylist } from '../services/queueService';
 import { getPlaylistItems } from '../services/youtubeService';
+import { getRoomPresence } from '../ws/wsServer';
 import { validate } from '../middleware/validate';
 import { AppError } from '../types';
-import type { GuestRow } from '../types';
+import type { RoomMemberRow, UserRow } from '../types';
 
 const router = express.Router();
 
 // POST /api/rooms
-// Creates a room for the current session (idempotent).
+// Creates a room for the current user (idempotent).
 router.post(
   '/',
   validate({
+    displayName: {
+      rules: ['required', ['minLen', 1], ['maxLen', 30]],
+      sanitize: true,
+      message: 'displayName must be 1-30 characters',
+    },
     tokenAllowance: {
       rules: [['min', 1], ['max', 20]],
       coerce: 'int',
@@ -28,11 +34,18 @@ router.post(
   }),
   (req: Request, res: Response, next: NextFunction): void => {
     try {
-      const body = req.body as { tokenAllowance?: number; tokenRefreshIntervalMinutes?: number };
-      const { tokenAllowance, tokenRefreshIntervalMinutes } = body;
+      const userId = req.session.youtube?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
+      const body = req.body as { displayName: string; tokenAllowance?: number; tokenRefreshIntervalMinutes?: number };
+      const { displayName, tokenAllowance, tokenRefreshIntervalMinutes } = body;
 
       const room = createRoom({
-        sessionId: req.session.id,
+        userId,
+        displayName: displayName.trim(),
         tokenAllowance: tokenAllowance !== undefined ? Number(tokenAllowance) : undefined,
         tokenRefreshIntervalMinutes:
           tokenRefreshIntervalMinutes !== undefined ? Number(tokenRefreshIntervalMinutes) : undefined,
@@ -53,7 +66,6 @@ router.post(
 );
 
 // POST /api/rooms/join
-// Join a room as a guest (idempotent per session).
 router.post(
   '/join',
   validate({
@@ -69,25 +81,31 @@ router.post(
   }),
   (req: Request, res: Response, next: NextFunction): void => {
     try {
+      const userId = req.session.youtube?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
       const body = req.body as { code: string; displayName: string };
       const { code, displayName } = body;
 
-      const guest = joinRoom({
-        sessionId: req.session.id,
+      const member = joinRoom({
+        userId,
         code: String(code).toUpperCase(),
         displayName: displayName.trim(),
       });
 
       res.status(200).json({
-        roomCode: guest.code,
-        guestId: guest.id,
-        displayName: guest.displayName,
-        tokensRemaining: guest.tokensRemaining,
-        tokenRefreshIntervalMinutes: guest.tokenRefreshIntervalMinutes,
+        roomCode: member.code,
+        guestId: member.id,
+        displayName: member.displayName,
+        tokensRemaining: member.tokensRemaining,
+        tokenRefreshIntervalMinutes: member.tokenRefreshIntervalMinutes,
       });
     } catch (err) {
       if (err instanceof AppError && err.statusCode === 404) {
-        res.status(404).json({ error: err.message });
+        res.status(404).json({ error: (err as AppError).message });
         return;
       }
       next(err);
@@ -96,9 +114,14 @@ router.post(
 );
 
 // POST /api/rooms/:code/heartbeat
-// Creator-only: updates last_activity_at to now. Returns { ok: true }.
 router.post('/:code/heartbeat', (req: Request, res: Response, next: NextFunction): void => {
   try {
+    const userId = req.session.youtube?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
     const code = String(req.params.code).toUpperCase();
     const room = getRoom(code);
 
@@ -107,21 +130,41 @@ router.post('/:code/heartbeat', (req: Request, res: Response, next: NextFunction
       return;
     }
 
-    if (!isCreator(room, req.session.id)) {
+    if (!isCreator(room.id, userId)) {
       res.status(403).json({ error: 'Forbidden' });
       return;
     }
 
     db.prepare('UPDATE rooms SET last_activity_at = ? WHERE id = ?').run(Date.now(), room.id);
-
     res.status(200).json({ ok: true });
   } catch (err) {
     next(err);
   }
 });
 
+// GET /api/rooms/mine
+// Returns all active rooms the current user is a member of.
+router.get('/mine', (req: Request, res: Response): void => {
+  const userId = req.session.youtube?.userId;
+  if (!userId) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return;
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT r.code, rm.role
+         FROM rooms r
+         JOIN room_members rm ON rm.room_id = r.id
+        WHERE rm.user_id = ? AND r.is_active = 1
+        ORDER BY r.last_activity_at DESC`
+    )
+    .all(userId) as Array<{ code: string; role: 'host' | 'guest' }>;
+
+  res.status(200).json({ rooms: rows });
+});
+
 // GET /api/rooms/:code
-// Returns room info. 404 if not found.
 router.get('/:code', (req: Request, res: Response, next: NextFunction): void => {
   try {
     const code = String(req.params.code).toUpperCase();
@@ -132,20 +175,35 @@ router.get('/:code', (req: Request, res: Response, next: NextFunction): void => 
       return;
     }
 
-    const guest = db
-      .prepare(
-        'SELECT id, display_name, tokens_remaining FROM guests WHERE room_id = ? AND session_id = ?'
-      )
-      .get(room.id, req.session.id) as Pick<GuestRow, 'id' | 'display_name' | 'tokens_remaining'> | undefined;
+    const userId = req.session.youtube?.userId;
+
+    const hostAccess = userId ? isCreator(room.id, userId) : false;
+
+    const memberRow = userId
+      ? (db
+          .prepare(
+            `SELECT rm.id, rm.tokens_remaining, u.display_name
+               FROM room_members rm
+               JOIN users u ON u.id = rm.user_id
+              WHERE rm.room_id = ? AND rm.user_id = ? AND rm.role = 'guest'`
+          )
+          .get(room.id, userId) as
+            | (Pick<RoomMemberRow, 'id' | 'tokens_remaining'> & Pick<UserRow, 'display_name'>)
+            | undefined)
+      : undefined;
 
     res.status(200).json({
       code: room.code,
       isActive: room.is_active === 1,
       tokenAllowance: room.token_allowance,
       tokenRefreshIntervalMinutes: room.token_refresh_interval_minutes,
-      isCreator: isCreator(room, req.session.id),
-      guestSession: guest
-        ? { guestId: guest.id, displayName: guest.display_name, tokensRemaining: guest.tokens_remaining }
+      isCreator: hostAccess,
+      guestSession: memberRow
+        ? {
+            guestId: memberRow.id,
+            displayName: memberRow.display_name,
+            tokensRemaining: memberRow.tokens_remaining,
+          }
         : null,
     });
   } catch (err) {
@@ -154,10 +212,15 @@ router.get('/:code', (req: Request, res: Response, next: NextFunction): void => 
 });
 
 // POST /api/rooms/:code/playlist
-// Creator-only: load a YouTube playlist as the background queue.
 router.post('/:code/playlist', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     try {
+      const userId = req.session.youtube?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
       const code = String(req.params.code).toUpperCase();
       const body = req.body as { playlistUrl?: string };
 
@@ -191,7 +254,7 @@ router.post('/:code/playlist', (req: Request, res: Response, next: NextFunction)
         return;
       }
 
-      const loaded = loadPlaylist(code, req.session.id, playlistId, items, nextPageToken);
+      const loaded = loadPlaylist(code, userId, playlistId, items, nextPageToken);
       res.status(200).json({ loaded });
     } catch (err) {
       if (err instanceof AppError) {
@@ -203,12 +266,52 @@ router.post('/:code/playlist', (req: Request, res: Response, next: NextFunction)
   })();
 });
 
-// DELETE /api/rooms/:code
-// Ends a room. Only the creator may do this; non-creator receives 403.
-router.delete('/:code', (req: Request, res: Response, next: NextFunction): void => {
+// GET /api/rooms/:code/members
+router.get('/:code/members', (req: Request, res: Response, next: NextFunction): void => {
   try {
     const code = String(req.params.code).toUpperCase();
-    endRoom(code, req.session.id);
+    const room = getRoom(code);
+    if (!room) {
+      res.status(404).json({ error: 'Room not found' });
+      return;
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT u.id as userId, u.display_name as displayName, rm.role
+           FROM room_members rm
+           JOIN users u ON u.id = rm.user_id
+          WHERE rm.room_id = ?
+          ORDER BY rm.joined_at ASC`
+      )
+      .all(room.id) as Array<{ userId: string; displayName: string; role: string }>;
+
+    const onlineUserIds = new Set(getRoomPresence(code).map((p) => p.userId));
+
+    const members = rows.map((row) => ({
+      userId: row.userId,
+      displayName: row.displayName,
+      role: row.role,
+      online: onlineUserIds.has(row.userId),
+    }));
+
+    res.status(200).json({ members });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/rooms/:code
+router.delete('/:code', (req: Request, res: Response, next: NextFunction): void => {
+  try {
+    const userId = req.session.youtube?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    const code = String(req.params.code).toUpperCase();
+    endRoom(code, userId);
     res.status(204).send();
   } catch (err) {
     if (err instanceof AppError) {

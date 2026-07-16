@@ -26,11 +26,10 @@ export default function OAuthCallbackPage() {
 
     const redirectUri = `${window.location.origin}/auth/callback`;
 
-    // Determine where to go after auth:
-    // - guest flow encodes {"intent":"guest","roomCode":"XXXXX"} in state
-    // - host flow has no state → go to create-room
+    // Determine where to send the user after login.
+    // guest intent → go to the specific room; everything else → home (shows their rooms).
+    let redirectTo = '/';
     const stateParam = searchParams.get('state');
-    let redirectTo = '/room/create';
     if (stateParam) {
       try {
         const parsed = JSON.parse(stateParam) as { roomCode?: string; intent?: string };

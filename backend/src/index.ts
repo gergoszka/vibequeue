@@ -48,8 +48,6 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-startInactivityWatcher();
-
 // Restart token schedulers for rooms that were active before this server boot
 const activeRooms = db
   .prepare('SELECT id, code FROM rooms WHERE is_active = 1')
@@ -67,7 +65,6 @@ app.use((_req: Request, res: Response) => {
 });
 
 // Global error handler — 4-arg signature required by Express
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: Error & { type?: string; statusCode?: number }, _req: Request, res: Response, _next: NextFunction) => {
   // Malformed JSON body — Express body-parser emits a SyntaxError with this type
   if ((err as { type?: string }).type === 'entity.parse.failed') {
@@ -82,6 +79,7 @@ app.use((err: Error & { type?: string; statusCode?: number }, _req: Request, res
 
 const httpServer = http.createServer(app);
 createWsServer(httpServer);
+startInactivityWatcher();
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

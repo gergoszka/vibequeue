@@ -42,7 +42,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
-  useEffect(() => { checkAuthStatus(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { checkAuthStatus(); }, []);
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, youtubeEmail, loading, checkAuthStatus, logout }}>

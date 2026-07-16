@@ -43,6 +43,7 @@ export function useSearch(roomCode: string | undefined): {
     }, 300);
 
     return () => clearTimeout(timerId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- useApi functions are recreated each render but referentially stable in behaviour
   }, [query, roomCode]);
 
   const clearSearch = useCallback(() => {

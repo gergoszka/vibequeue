@@ -41,7 +41,7 @@ function checkInactiveRooms(): void {
 
   for (const room of inactiveRooms) {
     try {
-      db.prepare('UPDATE rooms SET is_active = 0 WHERE id = ?').run(room.id);
+      db.prepare('UPDATE rooms SET is_active = 0, youtube_access_token = NULL WHERE id = ?').run(room.id);
       stopTokenScheduler(room.id); // schedulers map is keyed by UUID (room.id)
       cleanupEmitter.emit('room_closed', room.code);
       console.log(`[cleanup] Room ${room.code} closed due to inactivity`);

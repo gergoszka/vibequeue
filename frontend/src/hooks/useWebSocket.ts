@@ -3,15 +3,22 @@ import { WsStatus } from '../types';
 import { API_BASE, WS_URL } from '../config';
 const MAX_RETRIES = 5;
 
+export interface RoomMember {
+  userId: string;
+  displayName: string;
+  role: string;
+}
+
 interface UseWebSocketProps {
   roomCode: string | undefined;
   onQueueUpdated?: () => void;
   onNowPlaying?: (entry?: unknown) => void;
   onRoomClosed?: () => void;
   onTokenRefreshed?: (payload?: unknown) => void;
+  onUsersUpdated?: (members: RoomMember[]) => void;
 }
 
-export function useWebSocket({ roomCode, onQueueUpdated, onNowPlaying, onRoomClosed, onTokenRefreshed }: UseWebSocketProps): { status: WsStatus } {
+export function useWebSocket({ roomCode, onQueueUpdated, onNowPlaying, onRoomClosed, onTokenRefreshed, onUsersUpdated }: UseWebSocketProps): { status: WsStatus } {
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef<number>(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -23,10 +30,12 @@ export function useWebSocket({ roomCode, onQueueUpdated, onNowPlaying, onRoomClo
   const onNowPlayingRef = useRef(onNowPlaying);
   const onRoomClosedRef = useRef(onRoomClosed);
   const onTokenRefreshedRef = useRef(onTokenRefreshed);
+  const onUsersUpdatedRef = useRef(onUsersUpdated);
   useEffect(() => { onQueueUpdatedRef.current = onQueueUpdated; });
   useEffect(() => { onNowPlayingRef.current = onNowPlaying; });
   useEffect(() => { onRoomClosedRef.current = onRoomClosed; });
   useEffect(() => { onTokenRefreshedRef.current = onTokenRefreshed; });
+  useEffect(() => { onUsersUpdatedRef.current = onUsersUpdated; });
 
   const sessionIdRef = useRef<string | null>(null);
 
@@ -72,6 +81,9 @@ export function useWebSocket({ roomCode, onQueueUpdated, onNowPlaying, onRoomClo
           break;
         case 'token_refreshed':
           onTokenRefreshedRef.current?.(msg.payload);
+          break;
+        case 'users_updated':
+          onUsersUpdatedRef.current?.(msg.payload as RoomMember[]);
           break;
         default:
           break;

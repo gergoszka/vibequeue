@@ -31,7 +31,7 @@ export function useTokenStatus(roomCode: string | undefined): {
     } finally {
       setIsLoading(false);
     }
-  }, [roomCode]);
+  }, [roomCode]); // eslint-disable-line react-hooks/exhaustive-deps -- get recreated each render; omitting avoids infinite refetch loop
 
   // Initial fetch
   useEffect(() => {

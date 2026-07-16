@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useApi } from '../hooks/useApi';
@@ -9,31 +9,45 @@ interface AuthUrlResponse {
   url: string;
 }
 
+interface RoomSummary {
+  code: string;
+  role: 'host' | 'guest';
+}
+
 export default function HomePage() {
   const navigate = useNavigate();
   const { get } = useApi();
   const { isAuthenticated, loading: authLoading } = useAuth();
 
-  const [hostLoading, setHostLoading] = useState<boolean>(false);
-  const [hostError, setHostError] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
-  const [joinCode, setJoinCode] = useState<string>('');
+  const [joinCode, setJoinCode] = useState('');
 
-  async function handleStartAsHost(): Promise<void> {
-    // Already authenticated — go straight to create, no OAuth round-trip needed.
-    if (isAuthenticated) {
-      navigate('/room/create');
-      return;
-    }
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
 
-    setHostLoading(true);
-    setHostError(null);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    setRoomsLoading(true);
+    get<{ rooms: RoomSummary[] }>('/api/rooms/mine')
+      .then((data) => setRooms(data.rooms))
+      .catch(() => setRooms([]))
+      .finally(() => setRoomsLoading(false));
+  }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleLogin(): Promise<void> {
+    setLoginLoading(true);
+    setLoginError(null);
     try {
-      const data = await get<AuthUrlResponse>('/api/auth/youtube/url');
+      const redirectUri = `${window.location.origin}/auth/callback`;
+      const data = await get<AuthUrlResponse>(
+        `/api/auth/youtube/url?redirectUri=${encodeURIComponent(redirectUri)}`
+      );
       window.location.href = data.url;
     } catch (err) {
-      setHostError((err as Error).message || 'Failed to start authentication. Please try again.');
-      setHostLoading(false);
+      setLoginError((err as Error).message || 'Failed to start authentication.');
+      setLoginLoading(false);
     }
   }
 
@@ -43,55 +57,109 @@ export default function HomePage() {
     if (code) navigate(`/room/${code}`);
   }
 
+  if (authLoading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <LoadingSpinner />
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Layout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-6 text-center">
+          <h1 className="text-5xl font-bold tracking-tight">VibeQueue</h1>
+          <p className="text-gray-400 text-lg">Collaborative music queue for your room</p>
+          {loginError && <p className="text-red-400 text-sm">{loginError}</p>}
+          <button
+            onClick={handleLogin}
+            disabled={loginLoading}
+            className="min-h-[44px] bg-white text-gray-900 font-semibold px-8 py-3 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {loginLoading ? <LoadingSpinner /> : 'Sign in with YouTube'}
+          </button>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout>
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8 text-center">
-        <h1 className="text-5xl font-bold tracking-tight">VibeQueue</h1>
-        <p className="text-gray-400 text-lg">Create or join a music room</p>
+      <div className="max-w-2xl mx-auto flex flex-col gap-8 py-8">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight mb-6">VibeQueue</h1>
 
-        <div className="flex flex-col gap-6 mt-4 w-full max-w-xl md:grid md:grid-cols-2 md:gap-6">
-          {/* Host panel */}
-          <div className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col items-center gap-4">
-            <h2 className="text-lg font-semibold text-white">I&apos;m a Host</h2>
-            <p className="text-gray-400 text-sm">
-              {isAuthenticated
-                ? 'You\'re signed in and ready to go.'
-                : 'Connect your YouTube account to start a room.'}
-            </p>
-            {hostError && (
-              <p className="text-red-400 text-sm">{hostError}</p>
-            )}
+          {/* Actions */}
+          <div className="flex flex-col sm:flex-row gap-4">
             <button
-              onClick={handleStartAsHost}
-              disabled={hostLoading || authLoading}
-              className="w-full min-h-[44px] bg-white text-gray-900 font-semibold px-6 py-3 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              onClick={() => navigate('/room/create')}
+              className="min-h-[44px] bg-white text-gray-900 font-semibold px-6 py-3 rounded-lg hover:bg-gray-200 transition-colors"
             >
-              {authLoading ? <LoadingSpinner /> : hostLoading ? 'Redirecting...' : 'Start a Room'}
+              Create Room
             </button>
-          </div>
 
-          {/* Guest panel */}
-          <div className="flex-1 bg-gray-800 border border-gray-700 rounded-xl p-6 flex flex-col items-center gap-4">
-            <h2 className="text-lg font-semibold text-white">I&apos;m a Guest</h2>
-            <p className="text-gray-400 text-sm">Enter a room code to join.</p>
-            <form onSubmit={handleJoin} className="w-full flex flex-col gap-3">
+            <form onSubmit={handleJoin} className="flex flex-1 gap-2">
               <input
                 type="text"
                 value={joinCode}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setJoinCode(e.target.value.toUpperCase())}
-                placeholder="Enter room code"
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setJoinCode(e.target.value.toUpperCase())
+                }
+                placeholder="Room code"
                 maxLength={8}
-                className="bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white text-base placeholder-gray-500 focus:outline-none focus:border-gray-400 uppercase tracking-widest w-full"
+                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-gray-500 uppercase tracking-widest"
               />
               <button
                 type="submit"
                 disabled={!joinCode.trim()}
-                className="w-full min-h-[44px] border border-gray-600 text-white font-semibold px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="min-h-[44px] border border-gray-600 text-white font-semibold px-6 py-3 rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Join Room
+                Join
               </button>
             </form>
           </div>
+        </div>
+
+        {/* Active rooms */}
+        <div>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            Your active rooms
+          </h2>
+
+          {roomsLoading ? (
+            <div className="flex justify-center py-6">
+              <LoadingSpinner />
+            </div>
+          ) : rooms.length === 0 ? (
+            <p className="text-gray-500 text-sm">No active rooms.</p>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {rooms.map((room) => (
+                <li
+                  key={room.code}
+                  className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-xl px-5 py-4"
+                >
+                  <div>
+                    <span className="text-white font-mono font-semibold tracking-widest text-lg">
+                      {room.code}
+                    </span>
+                    <span className="ml-3 text-xs text-gray-400 uppercase tracking-wider">
+                      {room.role}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => navigate(`/room/${room.code}`)}
+                    className="text-sm border border-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+                  >
+                    Open
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
     </Layout>

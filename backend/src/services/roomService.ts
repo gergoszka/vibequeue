@@ -1,38 +1,41 @@
 import { db } from '../db';
-import { RoomRow, GuestRow, AppError } from '../types';
+import { RoomRow, RoomMemberRow, UserRow, AppError } from '../types';
+import { cleanupEmitter } from './cleanupService';
 
-/**
- * Generate a 5-char uppercase alphanumeric room code.
- */
 function generateCode(): string {
   return Math.random().toString(36).substring(2, 7).toUpperCase();
 }
 
 /**
- * Create a new room for the given session, or return the existing active room
- * if one already exists for this session (idempotent).
+ * Create a new room for the given user, or return their existing active host room (idempotent).
  */
 export function createRoom({
-  sessionId,
+  userId,
+  displayName,
   tokenAllowance = 5,
   tokenRefreshIntervalMinutes = 30,
   youtubeAccessToken = null,
 }: {
-  sessionId: string;
+  userId: string;
+  displayName: string;
   tokenAllowance?: number;
   tokenRefreshIntervalMinutes?: number;
   youtubeAccessToken?: string | null;
 }): { id: string; code: string; tokenAllowance: number; tokenRefreshIntervalMinutes: number } {
-  // Idempotency: return existing active room for this session
   const existing = db
-    .prepare('SELECT * FROM rooms WHERE creator_session_id = ? AND is_active = 1')
-    .get(sessionId) as RoomRow | undefined;
+    .prepare(
+      `SELECT r.* FROM rooms r
+       JOIN room_members rm ON rm.room_id = r.id
+       WHERE rm.user_id = ? AND rm.role = 'host' AND r.is_active = 1`
+    )
+    .get(userId) as RoomRow | undefined;
 
   if (existing) {
     if (youtubeAccessToken && youtubeAccessToken !== existing.youtube_access_token) {
       db.prepare('UPDATE rooms SET youtube_access_token = ? WHERE id = ?')
         .run(youtubeAccessToken, existing.id);
     }
+    db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, userId);
     return {
       id: existing.id,
       code: existing.code,
@@ -44,21 +47,27 @@ export function createRoom({
   const id = crypto.randomUUID();
   const now = Date.now();
 
-  const insert = db.prepare(`
+  const insertRoom = db.prepare(`
     INSERT INTO rooms
-      (id, code, creator_session_id, youtube_access_token, token_allowance, token_refresh_interval_minutes, created_at, last_activity_at, is_active)
+      (id, code, youtube_access_token, token_allowance, token_refresh_interval_minutes, created_at, last_activity_at, is_active)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, 1)
+      (?, ?, ?, ?, ?, ?, ?, 1)
   `);
 
-  // Retry loop — up to 5 attempts on UNIQUE constraint collision for code
+  const insertMember = db.prepare(
+    `INSERT INTO room_members (id, room_id, user_id, role, joined_at) VALUES (?, ?, ?, 'host', ?)`
+  );
+
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = generateCode();
     try {
-      insert.run(id, code, sessionId, youtubeAccessToken, tokenAllowance, tokenRefreshIntervalMinutes, now, now);
+      db.transaction(() => {
+        insertRoom.run(id, code, youtubeAccessToken, tokenAllowance, tokenRefreshIntervalMinutes, now, now);
+        insertMember.run(crypto.randomUUID(), id, userId, now);
+        db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, userId);
+      })();
       return { id, code, tokenAllowance, tokenRefreshIntervalMinutes };
     } catch (err: unknown) {
-      // SQLite UNIQUE constraint error: better-sqlite3 uses err.code === 'SQLITE_CONSTRAINT_UNIQUE'
       if (
         err &&
         typeof err === 'object' &&
@@ -66,7 +75,6 @@ export function createRoom({
         typeof (err as { code: unknown }).code === 'string' &&
         (err as { code: string }).code.startsWith('SQLITE_CONSTRAINT')
       ) {
-        // collision — retry with a new code
         continue;
       }
       throw err;
@@ -77,16 +85,16 @@ export function createRoom({
 }
 
 /**
- * Join a room, or return the existing guest record if this session already joined (idempotent).
+ * Join a room as a guest, or return the existing member record (idempotent).
  *
- * @throws {AppError} with status 404 if room not found / inactive
+ * @throws {AppError} 404 if room not found / inactive
  */
 export function joinRoom({
-  sessionId,
+  userId,
   code,
   displayName,
 }: {
-  sessionId: string;
+  userId: string;
   code: string;
   displayName: string;
 }): { id: string; roomId: string; code: string; displayName: string; tokensRemaining: number; tokenRefreshIntervalMinutes: number } {
@@ -98,34 +106,38 @@ export function joinRoom({
     throw new AppError('Room not found', 404);
   }
 
-  // Idempotency: return existing guest record for this session in this room.
   const existing = db
-    .prepare('SELECT * FROM guests WHERE room_id = ? AND session_id = ?')
-    .get(room.id, sessionId) as GuestRow | undefined;
+    .prepare('SELECT * FROM room_members WHERE room_id = ? AND user_id = ?')
+    .get(room.id, userId) as RoomMemberRow | undefined;
 
   if (existing) {
+    const user = db
+      .prepare('SELECT display_name FROM users WHERE id = ?')
+      .get(userId) as Pick<UserRow, 'display_name'> | undefined;
     return {
       id: existing.id,
       roomId: room.id,
       code: room.code,
-      displayName: existing.display_name,
-      tokensRemaining: existing.tokens_remaining,
+      displayName: user?.display_name || displayName,
+      tokensRemaining: existing.tokens_remaining ?? room.token_allowance,
       tokenRefreshIntervalMinutes: room.token_refresh_interval_minutes,
     };
   }
 
-  const guestId = crypto.randomUUID();
+  const memberId = crypto.randomUUID();
   const now = Date.now();
 
-  db.prepare(`
-    INSERT INTO guests
-      (id, room_id, session_id, display_name, tokens_remaining, last_token_refresh_at, joined_at)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?)
-  `).run(guestId, room.id, sessionId, displayName, room.token_allowance, now, now);
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO room_members (id, room_id, user_id, role, tokens_remaining, last_token_refresh_at, joined_at)
+       VALUES (?, ?, ?, 'guest', ?, ?, ?)`
+    ).run(memberId, room.id, userId, room.token_allowance, now, now);
+
+    db.prepare('UPDATE users SET display_name = ? WHERE id = ?').run(displayName, userId);
+  })();
 
   return {
-    id: guestId,
+    id: memberId,
     roomId: room.id,
     code: room.code,
     displayName,
@@ -139,32 +151,41 @@ export function joinRoom({
  */
 export function getRoom(code: string): RoomRow | null {
   const row = db.prepare('SELECT * FROM rooms WHERE code = ?').get(code) as RoomRow | undefined;
-  if (!row) return null;
-  return row;
+  return row ?? null;
 }
 
 /**
- * Deactivate a room. Throws AppError if sessionId is not the creator.
- *
- * @throws {AppError} with status 404 or 403
+ * Hard-delete a room and all its data. Throws 404/403 if not found or user is not the host.
  */
-export function endRoom(code: string, sessionId: string): void {
+export function endRoom(code: string, userId: string): void {
   const room = db.prepare('SELECT * FROM rooms WHERE code = ?').get(code) as RoomRow | undefined;
 
   if (!room) {
     throw new AppError('Room not found', 404);
   }
 
-  if (room.creator_session_id !== sessionId) {
+  const isHost = db
+    .prepare(`SELECT id FROM room_members WHERE room_id = ? AND user_id = ? AND role = 'host'`)
+    .get(room.id, userId);
+
+  if (!isHost) {
     throw new AppError('Forbidden', 403);
   }
 
-  db.prepare('UPDATE rooms SET is_active = 0 WHERE id = ?').run(room.id);
+  db.transaction(() => {
+    db.prepare('DELETE FROM queue_entries WHERE room_id = ?').run(room.id);
+    db.prepare('DELETE FROM room_members WHERE room_id = ?').run(room.id);
+    db.prepare('DELETE FROM rooms WHERE id = ?').run(room.id);
+  })();
+
+  cleanupEmitter.emit('room_closed', room.code);
 }
 
 /**
- * Check whether a session is the creator of the given room row.
+ * Returns true when userId is the host of roomId.
  */
-export function isCreator(room: RoomRow, sessionId: string): boolean {
-  return room.creator_session_id === sessionId;
+export function isCreator(roomId: string, userId: string): boolean {
+  return !!db
+    .prepare(`SELECT id FROM room_members WHERE room_id = ? AND user_id = ? AND role = 'host'`)
+    .get(roomId, userId);
 }

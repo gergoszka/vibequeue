@@ -33,11 +33,16 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
   playerReady: boolean;
   muted: boolean;
   unmute: () => void;
+  stop: () => void;
 } {
   const playerRef = useRef<YTPlayer | null>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(true); // Start muted for autoplay compatibility
   const unmutedByUserRef = useRef<boolean>(false); // tracks whether user has explicitly unmuted
+  const onEndedRef = useRef(onEnded);
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onEndedRef.current = onEnded; }, [onEnded]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   // Init player
   useEffect(() => {
@@ -67,12 +72,12 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
           onReady: () => { setPlayerReady(true); },
           onStateChange: (event) => {
             if (event.data === window.YT.PlayerState.ENDED) {
-              onEnded?.();
+              onEndedRef.current?.();
             }
           },
           onError: (event) => {
             console.error('[YT Player] error code:', event.data);
-            onError?.(event.data);
+            onErrorRef.current?.(event.data);
           },
         },
       });
@@ -81,11 +86,11 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
     return () => {
       destroyed = true;
       if (playerRef.current) {
-        try { playerRef.current.destroy(); } catch (_) { /* ignore */ }
+        try { playerRef.current.destroy(); } catch { /* ignore */ }
         playerRef.current = null;
       }
     };
-  }, [containerId]); // Only re-init player when container changes
+  }, [containerId]); // eslint-disable-line react-hooks/exhaustive-deps -- videoId changes handled by the second effect; onEnded/onError kept current via refs
 
   // Load new video or stop when videoId changes (without re-creating the player)
   useEffect(() => {

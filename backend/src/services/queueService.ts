@@ -1,7 +1,8 @@
 import EventEmitter from 'events';
 import { db } from '../db';
 import { deductToken } from './tokenService';
-import { QueueEntryRow, PublicQueueEntry, RoomRow, GuestRow, AppError } from '../types';
+import { isCreator } from './roomService';
+import { QueueEntryRow, PublicQueueEntry, RoomRow, RoomMemberRow, AppError } from '../types';
 
 export const queueEmitter = new EventEmitter();
 
@@ -10,9 +11,6 @@ export type AdvanceQueueResult =
   | { type: 'empty' }
   | { type: 'fetch_more_playlist'; playlistId: string; pageToken: string };
 
-/**
- * Map a raw queue_entries row + display_name into the public entry shape.
- */
 function formatEntry(row: QueueEntryRow & { display_name?: string | null }): PublicQueueEntry {
   return {
     id: row.id,
@@ -30,18 +28,15 @@ function formatEntry(row: QueueEntryRow & { display_name?: string | null }): Pub
 
 /**
  * Return all pending/playing queue entries for a room, ordered by position ASC.
- * Includes addedByDisplayName via LEFT JOIN on guests.
  *
- * @throws {AppError} with statusCode 404 if room not found
+ * @throws {AppError} 404 if room not found
  */
 export function getQueue(roomCode: string): PublicQueueEntry[] {
   const room = db
     .prepare('SELECT id FROM rooms WHERE code = ?')
     .get(roomCode.toUpperCase()) as Pick<RoomRow, 'id'> | undefined;
 
-  if (!room) {
-    throw new AppError('Room not found', 404);
-  }
+  if (!room) throw new AppError('Room not found', 404);
 
   const rows = db
     .prepare(
@@ -54,9 +49,12 @@ export function getQueue(roomCode: string): PublicQueueEntry[] {
               qe.source,
               qe.position,
               qe.started_playing_at,
-              g.display_name
+              qe.added_by_user_id,
+              qe.room_id,
+              qe.added_at,
+              u.display_name
          FROM queue_entries qe
-         LEFT JOIN guests g ON g.session_id = qe.added_by_session_id AND g.room_id = qe.room_id
+         LEFT JOIN users u ON u.id = qe.added_by_user_id
         WHERE qe.room_id = ?
           AND qe.status IN ('pending', 'playing')
         ORDER BY CASE WHEN qe.source = 'user' THEN 0 ELSE 1 END ASC, qe.position ASC`
@@ -69,11 +67,11 @@ export function getQueue(roomCode: string): PublicQueueEntry[] {
 /**
  * Add a song to the queue.
  *
- * @throws {AppError} statusCode 404 room not found, 410 room inactive, 402 no tokens, 403 not in room
+ * @throws {AppError} 404 room not found, 410 room inactive, 402 no tokens, 403 not in room
  */
 export function addToQueue(
   roomCode: string,
-  sessionId: string,
+  userId: string,
   {
     youtubeVideoId,
     title,
@@ -90,42 +88,31 @@ export function addToQueue(
     .prepare('SELECT * FROM rooms WHERE code = ?')
     .get(roomCode.toUpperCase()) as RoomRow | undefined;
 
-  if (!room) {
-    throw new AppError('Room not found', 404);
-  }
+  if (!room) throw new AppError('Room not found', 404);
+  if (!room.is_active) throw new AppError('Room is no longer active', 410);
 
-  if (!room.is_active) {
-    throw new AppError('Room is no longer active', 410);
-  }
-
-  const creatorSession = room.creator_session_id === sessionId;
+  const hostAccess = isCreator(room.id, userId);
 
   const addEntry = db.transaction((): PublicQueueEntry => {
-    // If the caller is a guest, look them up and deduct a token
-    if (!creatorSession) {
-      const guest = db
-        .prepare('SELECT id, tokens_remaining FROM guests WHERE room_id = ? AND session_id = ?')
-        .get(room.id, sessionId) as Pick<GuestRow, 'id' | 'tokens_remaining'> | undefined;
+    if (!hostAccess) {
+      const member = db
+        .prepare(
+          `SELECT id, tokens_remaining FROM room_members
+           WHERE room_id = ? AND user_id = ? AND role = 'guest'`
+        )
+        .get(room.id, userId) as Pick<RoomMemberRow, 'id' | 'tokens_remaining'> | undefined;
 
-      if (!guest) {
-        throw new AppError('Guest not found in this room', 403);
-      }
+      if (!member) throw new AppError('Not a member of this room', 403);
+      if ((member.tokens_remaining ?? 0) <= 0) throw new AppError('Insufficient tokens', 402);
 
-      if (guest.tokens_remaining <= 0) {
-        throw new AppError('Insufficient tokens', 402);
-      }
-
-      // Deduct via tokenService (it operates on guestId)
-      deductToken(guest.id);
+      deductToken(member.id);
     }
 
-    // Determine position
     const maxRow = db
       .prepare('SELECT MAX(position) AS max_pos FROM queue_entries WHERE room_id = ?')
       .get(room.id) as { max_pos: number | null };
     const position = (maxRow.max_pos || 0) + 1;
 
-    // Determine status: 'playing' if nothing is currently playing
     const playingRow = db
       .prepare("SELECT id FROM queue_entries WHERE room_id = ? AND status = 'playing'")
       .get(room.id);
@@ -133,43 +120,33 @@ export function addToQueue(
 
     const id = crypto.randomUUID();
     const now = Date.now();
-
     const startedPlayingAt = status === 'playing' ? now : null;
+
     db.prepare(
       `INSERT INTO queue_entries
-         (id, room_id, added_by_session_id, youtube_video_id, title, thumbnail_url, duration_seconds, position, status, added_at, started_playing_at)
-       VALUES
-         (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, room_id, added_by_user_id, youtube_video_id, title, thumbnail_url,
+          duration_seconds, position, status, source, added_at, started_playing_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)`
     ).run(
-      id,
-      room.id,
-      sessionId,
-      youtubeVideoId,
-      title,
-      thumbnailUrl || null,
-      durationSeconds || null,
-      position,
-      status,
-      now,
-      startedPlayingAt
+      id, room.id, userId, youtubeVideoId, title,
+      thumbnailUrl || null, durationSeconds || null,
+      position, status, now, startedPlayingAt
     );
 
-    // Update room activity
     db.prepare('UPDATE rooms SET last_activity_at = ? WHERE id = ?').run(now, room.id);
 
-    // Return the inserted row in public shape
     let displayName: string | null = null;
-    if (!creatorSession) {
-      const guestRow = db
-        .prepare('SELECT display_name FROM guests WHERE room_id = ? AND session_id = ?')
-        .get(room.id, sessionId) as Pick<GuestRow, 'display_name'> | undefined;
-      displayName = guestRow ? guestRow.display_name : null;
+    if (!hostAccess) {
+      const userRow = db
+        .prepare('SELECT display_name FROM users WHERE id = ?')
+        .get(userId) as { display_name: string | null } | undefined;
+      displayName = userRow?.display_name ?? null;
     }
 
     return formatEntry({
       id,
       room_id: room.id,
-      added_by_session_id: sessionId,
+      added_by_user_id: userId,
       youtube_video_id: youtubeVideoId,
       title,
       thumbnail_url: thumbnailUrl || null,
@@ -190,38 +167,29 @@ export function addToQueue(
 
 /**
  * Remove (soft-delete) a queue entry.
- * - Creator may remove any non-removed entry.
+ * - Host may remove any non-removed entry.
  * - Guest may only remove their own 'pending' entries.
  *
- * @throws {AppError} statusCode 404, 403
+ * @throws {AppError} 404, 403
  */
-export function removeEntry(roomCode: string, entryId: string, sessionId: string): void {
+export function removeEntry(roomCode: string, entryId: string, userId: string): void {
   const room = db
     .prepare('SELECT * FROM rooms WHERE code = ?')
     .get(roomCode.toUpperCase()) as RoomRow | undefined;
 
-  if (!room) {
-    throw new AppError('Room not found', 404);
-  }
+  if (!room) throw new AppError('Room not found', 404);
 
   const entry = db
     .prepare('SELECT * FROM queue_entries WHERE id = ? AND room_id = ?')
     .get(entryId, room.id) as QueueEntryRow | undefined;
 
-  if (!entry || entry.status === 'removed') {
-    throw new AppError('Queue entry not found', 404);
-  }
+  if (!entry || entry.status === 'removed') throw new AppError('Queue entry not found', 404);
 
-  const creatorSession = room.creator_session_id === sessionId;
+  const hostAccess = isCreator(room.id, userId);
 
-  if (!creatorSession) {
-    // Guest: must own the entry and it must be 'pending'
-    if (entry.added_by_session_id !== sessionId) {
-      throw new AppError('Forbidden', 403);
-    }
-    if (entry.status !== 'pending') {
-      throw new AppError('Forbidden', 403);
-    }
+  if (!hostAccess) {
+    if (entry.added_by_user_id !== userId) throw new AppError('Forbidden', 403);
+    if (entry.status !== 'pending') throw new AppError('Forbidden', 403);
   }
 
   const wasPlaying = entry.status === 'playing';
@@ -241,20 +209,19 @@ export function removeEntry(roomCode: string, entryId: string, sessionId: string
               qe.source,
               qe.position,
               qe.room_id,
-              qe.added_by_session_id,
+              qe.added_by_user_id,
               qe.added_at,
               qe.started_playing_at,
-              g.display_name
+              u.display_name
          FROM queue_entries qe
-         LEFT JOIN guests g ON g.session_id = qe.added_by_session_id AND g.room_id = qe.room_id
+         LEFT JOIN users u ON u.id = qe.added_by_user_id
         WHERE qe.room_id = ?
           AND qe.status = 'pending'
         ORDER BY CASE WHEN qe.source = 'user' THEN 0 ELSE 1 END ASC, qe.position ASC
         LIMIT 1`
     );
 
-    let next = findNext.get(room.id) as QueueEntryRow | undefined;
-
+    const next = findNext.get(room.id) as QueueEntryRow | undefined;
     if (!next) return null;
 
     const nowTs = Date.now();
@@ -263,35 +230,23 @@ export function removeEntry(roomCode: string, entryId: string, sessionId: string
   });
 
   const nextEntry = doRemove();
-  if (wasPlaying) {
-    queueEmitter.emit('now_playing', roomCode.toUpperCase(), nextEntry);
-  }
+  if (wasPlaying) queueEmitter.emit('now_playing', roomCode.toUpperCase(), nextEntry);
   queueEmitter.emit('queue_updated', roomCode.toUpperCase());
 }
 
 /**
- * Advance the queue: marks current 'playing' entry as 'played', promotes next
- * 'pending' entry (lowest position) to 'playing'.
- * Creator only — throws 403 otherwise.
- *
- * @returns the new playing entry in public shape, or null if queue is empty
- * @throws {AppError} statusCode 404, 403
+ * Advance the queue: marks current 'playing' entry as 'played', promotes next 'pending'.
+ * Host only — throws 403 otherwise.
  */
-export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueResult {
+export function advanceQueue(roomCode: string, userId: string): AdvanceQueueResult {
   const room = db
     .prepare('SELECT * FROM rooms WHERE code = ?')
     .get(roomCode.toUpperCase()) as RoomRow | undefined;
 
-  if (!room) {
-    throw new AppError('Room not found', 404);
-  }
-
-  if (room.creator_session_id !== sessionId) {
-    throw new AppError('Forbidden', 403);
-  }
+  if (!room) throw new AppError('Room not found', 404);
+  if (!isCreator(room.id, userId)) throw new AppError('Forbidden', 403);
 
   const advance = db.transaction((): AdvanceQueueResult => {
-    // Mark current playing entry as played
     db.prepare(
       "UPDATE queue_entries SET status = 'played' WHERE room_id = ? AND status = 'playing'"
     ).run(room.id);
@@ -306,12 +261,12 @@ export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueR
               qe.source,
               qe.position,
               qe.room_id,
-              qe.added_by_session_id,
+              qe.added_by_user_id,
               qe.added_at,
               qe.started_playing_at,
-              g.display_name
+              u.display_name
          FROM queue_entries qe
-         LEFT JOIN guests g ON g.session_id = qe.added_by_session_id AND g.room_id = qe.room_id
+         LEFT JOIN users u ON u.id = qe.added_by_user_id
         WHERE qe.room_id = ?
           AND qe.status = 'pending'
         ORDER BY CASE WHEN qe.source = 'user' THEN 0 ELSE 1 END ASC, qe.position ASC
@@ -331,7 +286,6 @@ export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueR
         .get(room.id) as { n: number };
 
       if (n > 0) {
-        // If there's a next page token, signal the caller to fetch more before looping
         const tokenRow = db
           .prepare('SELECT playlist_id, playlist_next_page_token FROM rooms WHERE id = ?')
           .get(room.id) as { playlist_id: string | null; playlist_next_page_token: string | null };
@@ -344,7 +298,6 @@ export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueR
           };
         }
 
-        // No more pages — loop from the beginning
         db.prepare(
           "UPDATE queue_entries SET status = 'pending' WHERE room_id = ? AND source = 'playlist' AND status = 'played'"
         ).run(room.id);
@@ -361,7 +314,6 @@ export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueR
 
   const result = advance();
 
-  // Only emit events when the advance is resolved — not when we're signalling the caller to fetch more
   if (result.type !== 'fetch_more_playlist') {
     const entry = result.type === 'playing' ? result.entry : null;
     queueEmitter.emit('now_playing', roomCode.toUpperCase(), entry);
@@ -372,16 +324,11 @@ export function advanceQueue(roomCode: string, sessionId: string): AdvanceQueueR
 }
 
 /**
- * Replace the playlist background queue for a room.
- * Removes all existing playlist entries (pending and played), then inserts
- * the new items. Creator-only.
- *
- * @returns number of items inserted
- * @throws {AppError} 404 room not found, 403 not creator
+ * Replace the playlist background queue. Host only.
  */
 export function loadPlaylist(
   roomCode: string,
-  sessionId: string,
+  userId: string,
   playlistId: string,
   items: Array<{ videoId: string; title: string; thumbnailUrl: string | null }>,
   nextPageToken?: string
@@ -391,10 +338,15 @@ export function loadPlaylist(
     .get(roomCode.toUpperCase()) as RoomRow | undefined;
 
   if (!room) throw new AppError('Room not found', 404);
-  if (room.creator_session_id !== sessionId) throw new AppError('Forbidden', 403);
+  if (!isCreator(room.id, userId)) throw new AppError('Forbidden', 403);
+
+  const hostMember = db
+    .prepare(`SELECT user_id FROM room_members WHERE room_id = ? AND role = 'host'`)
+    .get(room.id) as Pick<{ user_id: string }, 'user_id'> | undefined;
+
+  const hostUserId = hostMember?.user_id ?? userId;
 
   const doLoad = db.transaction((): number => {
-    // Clear all existing playlist entries for this room
     db.prepare(
       "UPDATE queue_entries SET status = 'removed' WHERE room_id = ? AND source = 'playlist'"
     ).run(room.id);
@@ -407,21 +359,16 @@ export function loadPlaylist(
     const now = Date.now();
     const insert = db.prepare(
       `INSERT INTO queue_entries
-         (id, room_id, added_by_session_id, youtube_video_id, title, thumbnail_url,
+         (id, room_id, added_by_user_id, youtube_video_id, title, thumbnail_url,
           duration_seconds, position, status, source, added_at, started_playing_at)
        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', 'playlist', ?, NULL)`
     );
 
     for (const item of items) {
       insert.run(
-        crypto.randomUUID(),
-        room.id,
-        room.creator_session_id,
-        item.videoId,
-        item.title,
-        item.thumbnailUrl,
-        position++,
-        now
+        crypto.randomUUID(), room.id, hostUserId,
+        item.videoId, item.title, item.thumbnailUrl,
+        position++, now
       );
     }
 
@@ -437,8 +384,7 @@ export function loadPlaylist(
 }
 
 /**
- * Append a new page of playlist items to the queue without clearing existing entries.
- * Called by the advance route when the playlist runs out and more pages are available.
+ * Append a new page of playlist items without clearing existing entries.
  */
 export function appendPlaylistItems(
   roomCode: string,
@@ -447,10 +393,16 @@ export function appendPlaylistItems(
   nextPageToken: string | undefined
 ): void {
   const room = db
-    .prepare('SELECT id, creator_session_id FROM rooms WHERE code = ?')
-    .get(roomCode.toUpperCase()) as Pick<RoomRow, 'id' | 'creator_session_id'> | undefined;
+    .prepare('SELECT id FROM rooms WHERE code = ?')
+    .get(roomCode.toUpperCase()) as Pick<RoomRow, 'id'> | undefined;
 
   if (!room) return;
+
+  const hostMember = db
+    .prepare(`SELECT user_id FROM room_members WHERE room_id = ? AND role = 'host'`)
+    .get(room.id) as { user_id: string } | undefined;
+
+  if (!hostMember) return;
 
   db.transaction(() => {
     const maxRow = db
@@ -461,21 +413,16 @@ export function appendPlaylistItems(
     const now = Date.now();
     const insert = db.prepare(
       `INSERT INTO queue_entries
-         (id, room_id, added_by_session_id, youtube_video_id, title, thumbnail_url,
+         (id, room_id, added_by_user_id, youtube_video_id, title, thumbnail_url,
           duration_seconds, position, status, source, added_at, started_playing_at)
        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pending', 'playlist', ?, NULL)`
     );
 
     for (const item of items) {
       insert.run(
-        crypto.randomUUID(),
-        room.id,
-        room.creator_session_id,
-        item.videoId,
-        item.title,
-        item.thumbnailUrl,
-        position++,
-        now
+        crypto.randomUUID(), room.id, hostMember.user_id,
+        item.videoId, item.title, item.thumbnailUrl,
+        position++, now
       );
     }
 

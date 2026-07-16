@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 
 interface LayoutProps {
   children: React.ReactNode;
+  wide?: boolean;
 }
 
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children, wide = false }: LayoutProps) {
   const { isAuthenticated, youtubeEmail, logout } = useAuth();
   const navigate = useNavigate();
 
@@ -17,7 +18,7 @@ export default function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       <header className="sticky top-0 z-10 bg-gray-950/90 backdrop-blur border-b border-gray-800 px-6 py-4">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
+        <div className={`${wide ? 'w-full' : 'max-w-2xl mx-auto'} flex items-center justify-between`}>
           <span className="text-xl font-bold tracking-tight text-white">VibeQueue</span>
           {isAuthenticated && youtubeEmail && (
             <div className="flex items-center gap-3">
@@ -33,7 +34,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
       </header>
       <main className="flex-1 w-full mx-auto px-4 py-4 md:px-8">
-        <div className="max-w-2xl mx-auto">
+        <div className={wide ? 'w-full' : 'max-w-2xl mx-auto'}>
           {children}
         </div>
       </main>

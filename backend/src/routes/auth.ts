@@ -1,10 +1,19 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { buildAuthUrl, exchangeCode, getUserEmail, refreshAccessToken, isTokenExpired, storeRefreshToken, getStoredRefreshToken } from '../services/authService';
+import {
+  buildAuthUrl,
+  exchangeCode,
+  getUserEmail,
+  refreshAccessToken,
+  isTokenExpired,
+  upsertUser,
+  clearUserSession,
+} from '../services/authService';
+import { db } from '../db';
+import type { RoomRow } from '../types';
 
 const router = express.Router();
 
 // GET /api/auth/youtube/url
-// Returns the Google OAuth URL.
 router.get('/youtube/url', (req: Request, res: Response, next: NextFunction): void => {
   try {
     const redirectUri =
@@ -21,8 +30,6 @@ router.get('/youtube/url', (req: Request, res: Response, next: NextFunction): vo
 });
 
 // POST /api/auth/youtube/callback
-// Body: { code, redirectUri }
-// Exchanges auth code for tokens, stores them in session.
 router.post('/youtube/callback', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const body = req.body as { code?: string; redirectUri?: string } | undefined;
@@ -55,18 +62,14 @@ router.post('/youtube/callback', async (req: Request, res: Response, next: NextF
       return;
     }
 
-    let refreshToken = tokens.refresh_token;
-    if (refreshToken) {
-      storeRefreshToken(email, refreshToken);
-    } else {
-      refreshToken = getStoredRefreshToken(email);
-    }
+    const user = upsertUser(email, req.session.id, tokens.refresh_token);
 
     req.session.youtube = {
       accessToken: tokens.access_token,
-      refreshToken,
+      refreshToken: user.refresh_token,
       expiryDate: tokens.expiry_date,
       email,
+      userId: user.id,
     };
 
     res.status(200).json({ success: true, email });
@@ -75,15 +78,51 @@ router.post('/youtube/callback', async (req: Request, res: Response, next: NextF
   }
 });
 
+// GET /api/auth/active-room
+// Returns the active room for the current user (as host or guest), or null.
+router.get('/active-room', (req: Request, res: Response): void => {
+  const userId = req.session.youtube?.userId;
+
+  if (!userId) {
+    res.status(200).json({ roomCode: null });
+    return;
+  }
+
+  const hostRoom = db
+    .prepare(
+      `SELECT r.code FROM rooms r
+       JOIN room_members rm ON rm.room_id = r.id
+       WHERE rm.user_id = ? AND rm.role = 'host' AND r.is_active = 1`
+    )
+    .get(userId) as Pick<RoomRow, 'code'> | undefined;
+
+  if (hostRoom) {
+    res.status(200).json({ roomCode: hostRoom.code, role: 'host' });
+    return;
+  }
+
+  const guestRoom = db
+    .prepare(
+      `SELECT r.code FROM rooms r
+       JOIN room_members rm ON rm.room_id = r.id
+       WHERE rm.user_id = ? AND rm.role = 'guest' AND r.is_active = 1`
+    )
+    .get(userId) as Pick<RoomRow, 'code'> | undefined;
+
+  if (guestRoom) {
+    res.status(200).json({ roomCode: guestRoom.code, role: 'guest' });
+    return;
+  }
+
+  res.status(200).json({ roomCode: null });
+});
+
 // GET /api/auth/me
-// Returns the server-assigned session identity.
 router.get('/me', (req: Request, res: Response): void => {
   res.json({ sessionId: req.session.id });
 });
 
 // GET /api/auth/status
-// Returns authentication state. Auto-refreshes an expired access token when a
-// refresh token is available so the caller never has to re-authenticate mid-session.
 router.get('/status', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const yt = req.session.youtube;
@@ -102,7 +141,6 @@ router.get('/status', async (req: Request, res: Response, next: NextFunction): P
             req.session.save((err) => (err ? reject(err) : resolve()))
           );
         } catch {
-          // Refresh token revoked or expired — clear auth, session stays
           delete req.session.youtube;
           res.status(200).json({ authenticated: false });
           return;
@@ -121,8 +159,11 @@ router.get('/status', async (req: Request, res: Response, next: NextFunction): P
 });
 
 // POST /api/auth/logout
-// Destroys the entire session (clears YouTube auth and room membership).
 router.post('/logout', (req: Request, res: Response, next: NextFunction): void => {
+  const email = req.session.youtube?.email;
+  if (email) {
+    clearUserSession(email);
+  }
   req.session.destroy((err) => {
     if (err) {
       next(err);

@@ -5,9 +5,16 @@ import { useYoutubePlayer } from '../hooks/useYoutubePlayer';
 import QueueDisplay from './QueueDisplay';
 import SearchPanel from './SearchPanel';
 import CreatorControls from './CreatorControls';
+import PlaylistBrowser from './PlaylistBrowser';
+import RoomMembersList from './RoomMembersList';
 import { API_BASE } from '../config';
+import type { RoomMember } from '../hooks/useWebSocket';
 
-export default function CreatorRoomView() {
+interface CreatorRoomViewProps {
+  wsMembers: RoomMember[];
+}
+
+export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
   const { room, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch } = useRoom();
   const [advancing, setAdvancing] = useState(false);
   const [skipError, setSkipError] = useState<string | null>(null);
@@ -26,7 +33,7 @@ export default function CreatorRoomView() {
       }
     }, 2 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [room?.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [room?.code]);
 
   const handleEnded = useCallback(async () => {
     if (advancing) return;
@@ -62,27 +69,40 @@ export default function CreatorRoomView() {
   }, [stop, handleEnded]);
 
   return (
-    <div className="space-y-4">
-      <CreatorControls />
+    <div className="flex gap-4 min-h-[calc(100vh-8rem)]">
+      {/* Left sidebar — Playlist browser */}
+      <div className="hidden lg:flex lg:flex-col w-72 flex-shrink-0">
+        <PlaylistBrowser roomCode={room?.code ?? ''} tokensRemaining={null} onSongAdded={refetch} />
+      </div>
 
-      {/* Hidden YouTube player — provides background audio, no video displayed */}
-      <YoutubePlayer />
+      {/* Center — main content */}
+      <div className="flex-1 min-w-0 space-y-4">
+        <CreatorControls />
 
-      {skipError && (
-        <p className="text-center text-red-400 text-xs">{skipError}</p>
-      )}
+        {/* Hidden YouTube player — provides background audio, no video displayed */}
+        <YoutubePlayer />
 
-      <SearchPanel tokensRemaining={null} onSongAdded={refetch} />
+        {skipError && (
+          <p className="text-center text-red-400 text-xs">{skipError}</p>
+        )}
 
-      <QueueDisplay
-        nowPlaying={nowPlaying}
-        upcomingEntries={upcomingEntries}
-        isLoading={isLoading}
-        onRefetch={refetch}
-        onSkip={handleSkip}
-        isMuted={muted}
-        onUnmute={unmute}
-      />
+        <SearchPanel tokensRemaining={null} onSongAdded={refetch} />
+
+        <QueueDisplay
+          nowPlaying={nowPlaying}
+          upcomingEntries={upcomingEntries}
+          isLoading={isLoading}
+          onRefetch={refetch}
+          onSkip={handleSkip}
+          isMuted={muted}
+          onUnmute={unmute}
+        />
+      </div>
+
+      {/* Right sidebar — Members list */}
+      <div className="hidden lg:flex lg:flex-col w-56 flex-shrink-0">
+        <RoomMembersList roomCode={room?.code ?? ''} members={wsMembers} />
+      </div>
     </div>
   );
 }

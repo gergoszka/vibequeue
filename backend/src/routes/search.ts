@@ -2,13 +2,11 @@ import express, { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
 import { isCreator } from '../services/roomService';
 import { searchWithDetails } from '../services/youtubeService';
-import type { RoomRow, GuestRow } from '../types';
+import type { RoomRow } from '../types';
 
 const router = express.Router();
 
 // GET /api/search?q=<query>&roomCode=<code>
-// Proxies a YouTube music video search using the creator's access token.
-// Accessible to the room creator and all joined guests.
 router.get('/', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const q = ((req.query.q as string | undefined) || '').trim();
@@ -27,7 +25,12 @@ router.get('/', async (req: Request, res: Response, next: NextFunction): Promise
       return;
     }
 
-    // Look up active room
+    const userId = req.session.youtube?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
     const room = db
       .prepare('SELECT * FROM rooms WHERE code = ? AND is_active = 1')
       .get(roomCode) as RoomRow | undefined;
@@ -37,35 +40,30 @@ router.get('/', async (req: Request, res: Response, next: NextFunction): Promise
       return;
     }
 
-    const sessionId = req.session.id;
-    const creatorAccess = isCreator(room, sessionId);
+    const hostAccess = isCreator(room.id, userId);
 
-    // Check if requester is a guest in this room
-    const guestRecord = creatorAccess
-      ? null
-      : (db
-          .prepare('SELECT id FROM guests WHERE room_id = ? AND session_id = ?')
-          .get(room.id, sessionId) as Pick<GuestRow, 'id'> | undefined);
+    if (!hostAccess) {
+      const isMember = db
+        .prepare('SELECT id FROM room_members WHERE room_id = ? AND user_id = ?')
+        .get(room.id, userId);
 
-    if (!creatorAccess && !guestRecord) {
-      res.status(403).json({ error: 'Not a room member' });
-      return;
+      if (!isMember) {
+        res.status(403).json({ error: 'Not a room member' });
+        return;
+      }
     }
 
-    // Token selection: creator uses their live session token; guests fall back to
-    // the creator's stored room token because their own Google OAuth token may
-    // not have the youtube scope granted (common when the OAuth app is in
-    // testing mode and the guest is not a listed test user).
+    // Token selection: host uses their live session token; guests fall back to
+    // the room's stored token so they can search even if their OAuth scope is limited.
     let accessToken: string | null;
-    if (creatorAccess) {
+    if (hostAccess) {
       accessToken = req.session.youtube?.accessToken ?? null;
       if (!accessToken) {
         res.status(503).json({ error: 'Please sign in with YouTube to search' });
         return;
       }
     } else {
-      accessToken =
-        req.session.youtube?.accessToken ?? room.youtube_access_token ?? null;
+      accessToken = req.session.youtube?.accessToken ?? room.youtube_access_token ?? null;
       if (!accessToken) {
         res.status(503).json({ error: 'Search unavailable – room not connected to YouTube' });
         return;

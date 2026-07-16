@@ -7,7 +7,6 @@ import { AppError } from '../types';
 const router = express.Router({ mergeParams: true });
 
 // GET /api/rooms/:code/queue
-// Returns all pending/playing entries for a room, ordered by position.
 router.get('/', (req: Request, res: Response, next: NextFunction): void => {
   try {
     const code = String(req.params.code).toUpperCase();
@@ -23,7 +22,6 @@ router.get('/', (req: Request, res: Response, next: NextFunction): void => {
 });
 
 // POST /api/rooms/:code/queue
-// Add a song to the queue. Deducts a token from guests.
 router.post(
   '/',
   validate({
@@ -48,6 +46,12 @@ router.post(
   }),
   (req: Request, res: Response, next: NextFunction): void => {
     try {
+      const userId = req.session.youtube?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
       const code = String(req.params.code).toUpperCase();
       const body = req.body as {
         youtubeVideoId: string;
@@ -57,7 +61,7 @@ router.post(
       };
       const { youtubeVideoId, title, thumbnailUrl, durationSeconds } = body;
 
-      const entry = addToQueue(code, req.session.id, {
+      const entry = addToQueue(code, userId, {
         youtubeVideoId: youtubeVideoId.trim(),
         title: title.trim(),
         thumbnailUrl: thumbnailUrl || null,
@@ -78,13 +82,18 @@ router.post(
 );
 
 // DELETE /api/rooms/:code/queue/:entryId
-// Remove a queue entry. Creator can remove any; guests can only remove their own pending entries.
 router.delete('/:entryId', (req: Request, res: Response, next: NextFunction): void => {
   try {
+    const userId = req.session.youtube?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
     const code = String(req.params.code).toUpperCase();
     const entryId = String(req.params.entryId);
 
-    removeEntry(code, entryId, req.session.id);
+    removeEntry(code, entryId, userId);
     res.status(204).send();
   } catch (err) {
     if (err instanceof AppError) {
@@ -102,13 +111,17 @@ router.delete('/:entryId', (req: Request, res: Response, next: NextFunction): vo
 });
 
 // POST /api/rooms/:code/queue/advance
-// Advance the queue: marks current playing entry as played, promotes next pending.
-// Creator only. If the playlist is exhausted and a next page exists, fetches it first.
 router.post('/advance', (req: Request, res: Response, next: NextFunction): void => {
   void (async () => {
     try {
+      const userId = req.session.youtube?.userId;
+      if (!userId) {
+        res.status(401).json({ error: 'Not authenticated' });
+        return;
+      }
+
       const code = String(req.params.code).toUpperCase();
-      let result = advanceQueue(code, req.session.id);
+      let result = advanceQueue(code, userId);
 
       if (result.type === 'fetch_more_playlist') {
         const accessToken = req.session.youtube?.accessToken;
@@ -131,13 +144,10 @@ router.post('/advance', (req: Request, res: Response, next: NextFunction): void 
         }
 
         if (!fetched) {
-          // No access token or fetch failed — force a loop by clearing the token in the DB
-          // so advanceQueue's loop branch fires on the retry
           appendPlaylistItems(code, result.playlistId, [], undefined);
         }
 
-        // Re-advance now that new (or reset) entries are available
-        result = advanceQueue(code, req.session.id);
+        result = advanceQueue(code, userId);
       }
 
       const nowPlaying = result.type === 'playing' ? result.entry : null;

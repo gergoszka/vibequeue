@@ -2,13 +2,20 @@ import type { Request, Response, NextFunction } from 'express';
 
 // ─── DB row shapes (raw better-sqlite3 rows) ─────────────────────────────────
 
+export interface UserRow {
+  id: string;
+  email: string;
+  display_name: string | null;
+  session_id: string | null;
+  refresh_token: string | null;
+  refresh_token_updated_at: number | null;
+  created_at: number;
+}
+
 export interface RoomRow {
   id: string;
   code: string;
-  creator_session_id: string;
   youtube_access_token: string | null;
-  youtube_refresh_token: string | null;
-  token_expires_at: number | null;
   token_allowance: number;
   token_refresh_interval_minutes: number;
   created_at: number;
@@ -18,20 +25,20 @@ export interface RoomRow {
   playlist_next_page_token: string | null;
 }
 
-export interface GuestRow {
+export interface RoomMemberRow {
   id: string;
   room_id: string;
-  session_id: string;
-  display_name: string;
-  tokens_remaining: number;
-  last_token_refresh_at: number;
+  user_id: string;
+  role: 'host' | 'guest';
+  tokens_remaining: number | null;
+  last_token_refresh_at: number | null;
   joined_at: number;
 }
 
 export interface QueueEntryRow {
   id: string;
   room_id: string;
-  added_by_session_id: string;
+  added_by_user_id: string;
   youtube_video_id: string;
   title: string;
   thumbnail_url: string | null;
@@ -41,7 +48,7 @@ export interface QueueEntryRow {
   source: 'user' | 'playlist';
   added_at: number;
   started_playing_at: number | null;
-  // from LEFT JOIN guests
+  // from LEFT JOIN users
   display_name?: string | null;
 }
 
@@ -87,6 +94,7 @@ declare module 'express-session' {
       refreshToken: string | null;
       expiryDate: number | null;
       email: string;
+      userId: string;
     };
   }
 }

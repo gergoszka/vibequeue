@@ -19,7 +19,7 @@ export default function GuestJoinForm({ roomCode }: GuestJoinFormProps) {
   const [displayName, setDisplayName] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const { setGuest } = useRoom();
+  const { setGuest, refreshTokenStatus } = useRoom();
   const { post } = useApi();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -33,6 +33,7 @@ export default function GuestJoinForm({ roomCode }: GuestJoinFormProps) {
       const data = await post<JoinRoomResponse>('/api/rooms/join', { code: roomCode, displayName: trimmed });
       const guest: Guest = { guestId: data.guestId, displayName: data.displayName, tokensRemaining: data.tokensRemaining };
       setGuest(guest);
+      refreshTokenStatus();
     } catch (err) {
       setError((err as Error).message || 'Failed to join room.');
     } finally {

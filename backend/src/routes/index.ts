@@ -4,6 +4,7 @@ import queueRouter from './queue';
 import { tokenStatusHandler } from './tokenRoutes';
 import authRouter from './auth';
 import searchRouter from './search';
+import youtubeRouter from './youtubeRoutes';
 
 export function registerRoutes(app: Express): void {
   app.use('/api/rooms', roomsRouter);
@@ -13,4 +14,5 @@ export function registerRoutes(app: Express): void {
   app.get('/api/rooms/:code/token-status', tokenStatusHandler);
   app.use('/api/auth', authRouter);
   app.use('/api/search', searchRouter);
+  app.use('/api/youtube', youtubeRouter);
 }

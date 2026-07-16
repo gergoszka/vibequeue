@@ -4,10 +4,29 @@ import { db } from '../db';
 import { cleanupEmitter } from '../services/cleanupService';
 import { queueEmitter } from '../services/queueService';
 import { tokenEmitter } from '../services/tokenService';
-import type { RoomRow } from '../types';
+import type { RoomRow, UserRow, RoomMemberRow } from '../types';
 
 // roomCode → Set<WebSocket>
 const roomClients = new Map<string, Set<WebSocket>>();
+
+// roomCode → Map<userId, {displayName, role}>
+const roomPresence = new Map<string, Map<string, { displayName: string; role: string }>>();
+
+export interface RoomMemberPresence {
+  userId: string;
+  displayName: string;
+  role: string;
+}
+
+export function getRoomPresence(roomCode: string): RoomMemberPresence[] {
+  const presence = roomPresence.get(roomCode);
+  if (!presence) return [];
+  return Array.from(presence.entries()).map(([userId, info]) => ({
+    userId,
+    displayName: info.displayName,
+    role: info.role,
+  }));
+}
 
 export function broadcast(roomCode: string, type: string, payload: unknown): void {
   const clients = roomClients.get(roomCode);
@@ -24,6 +43,7 @@ export function broadcast(roomCode: string, type: string, payload: unknown): voi
 interface ExtendedWebSocket extends WebSocket {
   isAlive: boolean;
   roomCode: string | null;
+  userId: string | null;
 }
 
 export function createWsServer(httpServer: Server): WebSocketServer {
@@ -33,6 +53,7 @@ export function createWsServer(httpServer: Server): WebSocketServer {
     const ws = rawWs as ExtendedWebSocket;
     ws.isAlive = true;
     ws.roomCode = null;
+    ws.userId = null;
 
     // 10-second timeout to receive join_room or disconnect
     const joinTimeout = setTimeout(() => {
@@ -44,21 +65,21 @@ export function createWsServer(httpServer: Server): WebSocketServer {
     });
 
     ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
-      let msg: { type?: string; roomCode?: string };
+      let msg: { type?: string; roomCode?: string; sessionId?: string };
       try {
-        msg = JSON.parse(data.toString()) as { type?: string; roomCode?: string };
+        msg = JSON.parse(data.toString()) as { type?: string; roomCode?: string; sessionId?: string };
       } catch {
         return;
       }
 
       if (msg.type === 'join_room') {
-        const { roomCode } = msg;
+        const { roomCode, sessionId } = msg;
         if (!roomCode) return;
 
         // Validate room exists and is active
         const room = db
-          .prepare('SELECT code FROM rooms WHERE code = ? AND is_active = 1')
-          .get(roomCode.toUpperCase()) as Pick<RoomRow, 'code'> | undefined;
+          .prepare('SELECT id, code FROM rooms WHERE code = ? AND is_active = 1')
+          .get(roomCode.toUpperCase()) as Pick<RoomRow, 'id' | 'code'> | undefined;
 
         if (!room) {
           ws.send(JSON.stringify({ type: 'error', message: 'Room not found' }));
@@ -70,6 +91,30 @@ export function createWsServer(httpServer: Server): WebSocketServer {
         ws.roomCode = room.code;
         if (!roomClients.has(room.code)) roomClients.set(room.code, new Set());
         roomClients.get(room.code)!.add(ws);
+
+        // Resolve user identity from session_id and track presence
+        if (sessionId) {
+          const userRow = db
+            .prepare('SELECT id, display_name FROM users WHERE session_id = ?')
+            .get(sessionId) as Pick<UserRow, 'id' | 'display_name'> | undefined;
+
+          if (userRow) {
+            const memberRow = db
+              .prepare('SELECT role FROM room_members WHERE room_id = ? AND user_id = ?')
+              .get(room.id, userRow.id) as Pick<RoomMemberRow, 'role'> | undefined;
+
+            if (memberRow) {
+              ws.userId = userRow.id;
+              if (!roomPresence.has(room.code)) roomPresence.set(room.code, new Map());
+              roomPresence.get(room.code)!.set(userRow.id, {
+                displayName: userRow.display_name ?? '',
+                role: memberRow.role,
+              });
+              broadcast(room.code, 'users_updated', getRoomPresence(room.code));
+            }
+          }
+        }
+
         ws.send(JSON.stringify({ type: 'joined', roomCode: room.code }));
       }
     });
@@ -80,6 +125,14 @@ export function createWsServer(httpServer: Server): WebSocketServer {
         if (clients) {
           clients.delete(ws);
           if (clients.size === 0) roomClients.delete(ws.roomCode!);
+        }
+        if (ws.userId) {
+          const presence = roomPresence.get(ws.roomCode);
+          if (presence) {
+            presence.delete(ws.userId);
+            if (presence.size === 0) roomPresence.delete(ws.roomCode);
+            else broadcast(ws.roomCode, 'users_updated', getRoomPresence(ws.roomCode));
+          }
         }
       }
     });
@@ -107,8 +160,9 @@ export function createWsServer(httpServer: Server): WebSocketServer {
   // Subscribe to room closure events
   cleanupEmitter.on('room_closed', (roomCode: string) => {
     broadcast(roomCode, 'room_closed', { roomCode });
-    // Clean up the client set
+    // Clean up the client set and presence map
     roomClients.delete(roomCode);
+    roomPresence.delete(roomCode);
   });
 
   // Subscribe to queue mutation events

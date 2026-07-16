@@ -15,6 +15,7 @@ export default function CreateRoomPage() {
   const { isAuthenticated, youtubeEmail, loading } = useAuth();
   const { post } = useApi();
 
+  const [displayName, setDisplayName] = useState<string>('');
   const [tokenAllowance, setTokenAllowance] = useState<number>(5);
   const [tokenRefreshIntervalMinutes, setTokenRefreshIntervalMinutes] = useState<number>(30);
   const [submitting, setSubmitting] = useState<boolean>(false);
@@ -46,6 +47,7 @@ export default function CreateRoomPage() {
     setError(null);
     try {
       const data = await post<CreateRoomResponse>('/api/rooms', {
+        displayName: displayName.trim(),
         tokenAllowance: Number(tokenAllowance),
         tokenRefreshIntervalMinutes: Number(tokenRefreshIntervalMinutes),
       });
@@ -69,6 +71,23 @@ export default function CreateRoomPage() {
 
         <form onSubmit={handleSubmit} className="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
           {error && <ErrorMessage message={error} />}
+
+          <div className="space-y-2">
+            <label htmlFor="displayName" className="block text-sm font-medium text-gray-300">
+              Your Display Name
+            </label>
+            <input
+              id="displayName"
+              type="text"
+              maxLength={30}
+              value={displayName}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)}
+              placeholder="e.g. DJ Gergo"
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-gray-400"
+              required
+            />
+            <p className="text-gray-500 text-xs">How guests will see you in the room (1–30 characters).</p>
+          </div>
 
           <div className="space-y-2">
             <label htmlFor="tokenAllowance" className="block text-sm font-medium text-gray-300">
@@ -105,7 +124,7 @@ export default function CreateRoomPage() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !displayName.trim()}
             className="w-full bg-white text-gray-900 font-semibold px-6 py-3 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Creating...' : 'Create Room'}

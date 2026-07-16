@@ -1,4 +1,5 @@
 import { db } from '../db';
+import type { UserRow } from '../types';
 
 if (!process.env.YOUTUBE_CLIENT_ID) {
   console.warn(
@@ -36,7 +37,7 @@ export function buildAuthUrl({ redirectUri, state }: { redirectUri: string; stat
     response_type: 'code',
     scope: YOUTUBE_SCOPE,
     access_type: 'offline',
-    prompt: 'select_account',
+    prompt: 'select_account consent',
   });
 
   if (state !== undefined && state !== null) {
@@ -71,7 +72,7 @@ export async function exchangeCode({
     body: body.toString(),
   });
 
-  let data: Record<string, unknown> = {};
+  let data: Record<string, unknown>;
   try {
     data = (await response.json()) as Record<string, unknown>;
   } catch {
@@ -101,7 +102,6 @@ export async function exchangeCode({
 
 /**
  * refreshAccessToken(refreshToken) → Promise<{ access_token, expiry_date }>
- * Uses a stored refresh token to obtain a fresh access token without user interaction.
  */
 export async function refreshAccessToken(refreshToken: string): Promise<{ access_token: string; expiry_date: number }> {
   const body = new URLSearchParams({
@@ -117,7 +117,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<{ access
     body: body.toString(),
   });
 
-  let data: Record<string, unknown> = {};
+  let data: Record<string, unknown>;
   try {
     data = (await response.json()) as Record<string, unknown>;
   } catch {
@@ -142,24 +142,47 @@ export async function refreshAccessToken(refreshToken: string): Promise<{ access
 
 /**
  * isTokenExpired(expiryDate) → boolean
- * Returns true when the token is expired or expiring within the buffer window.
  */
 export function isTokenExpired(expiryDate: number | null): boolean {
-  if (expiryDate === null) return false; // unknown expiry — assume valid
+  if (expiryDate === null) return false;
   return expiryDate - EXPIRY_BUFFER_MS < Date.now();
 }
 
-export function storeRefreshToken(email: string, refreshToken: string): void {
+/**
+ * upsertUser — create a user row on first login, or update session_id (and
+ * refresh_token when a new one is issued) on subsequent logins.
+ * Returns the full UserRow so the caller can store userId in session.
+ */
+export function upsertUser(
+  email: string,
+  sessionId: string,
+  refreshToken?: string | null
+): UserRow {
+  const now = Date.now();
+
   db.prepare(
-    'INSERT INTO user_refresh_tokens (email, refresh_token, updated_at) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET refresh_token = excluded.refresh_token, updated_at = excluded.updated_at'
-  ).run(email, refreshToken, Date.now());
+    'INSERT OR IGNORE INTO users (id, email, session_id, created_at) VALUES (?, ?, ?, ?)'
+  ).run(crypto.randomUUID(), email, sessionId, now);
+
+  if (refreshToken) {
+    db.prepare(
+      'UPDATE users SET session_id = ?, refresh_token = ?, refresh_token_updated_at = ? WHERE email = ?'
+    ).run(sessionId, refreshToken, now, email);
+  } else {
+    db.prepare('UPDATE users SET session_id = ? WHERE email = ?').run(sessionId, email);
+  }
+
+  return db.prepare('SELECT * FROM users WHERE email = ?').get(email) as UserRow;
 }
 
-export function getStoredRefreshToken(email: string): string | null {
-  const row = db
-    .prepare('SELECT refresh_token FROM user_refresh_tokens WHERE email = ?')
-    .get(email) as { refresh_token: string } | undefined;
-  return row?.refresh_token ?? null;
+/**
+ * clearUserSession — called on logout. Clears session_id and refresh_token so
+ * the user must re-authorise with Google on next login.
+ */
+export function clearUserSession(email: string): void {
+  db.prepare(
+    'UPDATE users SET session_id = NULL, refresh_token = NULL WHERE email = ?'
+  ).run(email);
 }
 
 /**

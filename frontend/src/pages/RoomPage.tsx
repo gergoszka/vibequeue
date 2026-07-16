@@ -4,6 +4,7 @@ import { useRoom } from '../contexts/RoomContext';
 import { RoomProvider } from '../contexts/RoomContext';
 import { useApi } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
+import type { RoomMember } from '../hooks/useWebSocket';
 import { API_BASE } from '../config';
 import Layout from '../components/Layout';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -34,6 +35,7 @@ function RoomPageInner() {
   const { get } = useApi();
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [wsMembers, setWsMembers] = useState<RoomMember[]>([]);
 
   useEffect(() => {
     if (!code) return;
@@ -74,6 +76,7 @@ function RoomPageInner() {
     onNowPlaying: () => {},
     onRoomClosed: handleRoomClosed,
     onTokenRefreshed: refreshTokenStatus,
+    onUsersUpdated: setWsMembers,
   });
 
   // Polling fallback: when WS has exhausted retries, poll every 10 seconds
@@ -112,8 +115,8 @@ function RoomPageInner() {
         <ConnectionStatus status={wsStatus} />
       </div>
       <ErrorBoundary>
-        {isCreator && <CreatorRoomView />}
-        {!isCreator && guest && <GuestRoomView />}
+        {isCreator && <CreatorRoomView wsMembers={wsMembers} />}
+        {!isCreator && guest && <GuestRoomView wsMembers={wsMembers} />}
         {!isCreator && !guest && isAuthenticated && code && <GuestJoinForm roomCode={code.toUpperCase()} />}
         {!isCreator && !guest && !isAuthenticated && !authLoading && code && <GuestAuthPrompt roomCode={code.toUpperCase()} />}
       </ErrorBoundary>
@@ -123,7 +126,7 @@ function RoomPageInner() {
 
 export default function RoomPage() {
   return (
-    <Layout>
+    <Layout wide>
       <RoomProvider>
         <RoomPageInner />
       </RoomProvider>
