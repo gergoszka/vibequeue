@@ -6,6 +6,7 @@ import path from 'path';
 import express, { Request, Response, NextFunction } from 'express';
 import corsMiddleware from './middleware/cors';
 import sessionMiddleware from './middleware/session';
+import { testModeSessionMiddleware } from './middleware/testMode';
 import { registerRoutes } from './routes';
 import { createWsServer } from './ws/wsServer';
 import { startInactivityWatcher } from './services/cleanupService';
@@ -21,10 +22,11 @@ if (process.env.NODE_ENV === 'production') {
   app.set('trust proxy', 1);
 }
 
-// Middleware: cors → json body parser → session
+// Middleware: cors → json body parser → session → (test-mode user injection)
 app.use(corsMiddleware);
 app.use(express.json({ limit: '100kb' }));
 app.use(sessionMiddleware);
+app.use(testModeSessionMiddleware);
 
 // Routes
 app.get('/health', (req: Request, res: Response) => {

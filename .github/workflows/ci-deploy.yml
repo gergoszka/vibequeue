@@ -25,8 +25,27 @@ jobs:
       - name: Build frontend
         run: npm run build --workspace=frontend
 
+      - name: Start backend server
+        run: node backend/dist/index.js &
+        env:
+          NODE_ENV: test
+          TEST_MODE: 'true'
+          SESSION_SECRET: ci-smoke-test-secret
+          PORT: 3001
+          DATA_DIR: /tmp/vibequeue-smoke
+
+      - name: Wait for server to be ready
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3001/health && echo "Server ready" && break
+            echo "Waiting for server... ($i/30)"
+            sleep 1
+          done
+
       - name: Run smoke tests
         run: npm run test:smoke --workspace=backend
+        env:
+          TEST_MODE: 'true'
 
   deploy-staging:
     needs: test

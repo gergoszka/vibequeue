@@ -69,7 +69,7 @@ async function runSmoke() {
 
   // ---- Step 1: Create a room ----
   console.log('Step 1: Create room');
-  const r1 = await req('POST', '/api/rooms', { tokenAllowance: 1, tokenRefreshIntervalMinutes: 30 }, creator);
+  const r1 = await req('POST', '/api/rooms', { displayName: 'Test DJ', tokenAllowance: 1, tokenRefreshIntervalMinutes: 30 }, creator);
   assert('POST /api/rooms → 201', r1.status === 201, `got ${r1.status}: ${JSON.stringify(r1.data)}`);
   assert('Response has roomCode', typeof r1.data?.roomCode === 'string' && r1.data.roomCode.length === 5);
   const roomCode = r1.data?.roomCode;
