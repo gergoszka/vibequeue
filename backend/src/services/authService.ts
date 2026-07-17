@@ -18,7 +18,7 @@ const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
 // 5-minute buffer so we refresh before expiry, not exactly at it
 const EXPIRY_BUFFER_MS = 5 * 60 * 1000;
-const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube email';
+const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly email';
 
 interface AuthTokens {
   access_token: string;

@@ -38,6 +38,11 @@ export default function Layout({ children, wide = false }: LayoutProps) {
           {children}
         </div>
       </main>
+      <footer className="border-t border-gray-800 py-4 px-6 text-center">
+        <a href="/privacy" className="text-xs text-gray-500 hover:text-gray-400 transition-colors">
+          Privacy Policy
+        </a>
+      </footer>
     </div>
   );
 }

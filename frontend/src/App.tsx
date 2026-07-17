@@ -6,6 +6,7 @@ import HomePage from './pages/HomePage';
 import CreateRoomPage from './pages/CreateRoomPage';
 import RoomPage from './pages/RoomPage';
 import OAuthCallbackPage from './pages/OAuthCallbackPage';
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ErrorBoundary from './components/ErrorBoundary';
 
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="/auth/callback" element={<OAuthCallbackPage />} />
               <Route path="/room/create" element={<CreateRoomPage />} />
               <Route path="/room/:code" element={<RoomPage />} />
+              <Route path="/privacy" element={<PrivacyPolicyPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </BrowserRouter>
