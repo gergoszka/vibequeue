@@ -32,12 +32,15 @@ interface UseYoutubePlayerProps {
 export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: UseYoutubePlayerProps): {
   playerReady: boolean;
   muted: boolean;
+  paused: boolean;
   unmute: () => void;
   stop: () => void;
+  togglePause: () => void;
 } {
   const playerRef = useRef<YTPlayer | null>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(true); // Start muted for autoplay compatibility
+  const [paused, setPaused] = useState<boolean>(false);
   const unmutedByUserRef = useRef<boolean>(false); // tracks whether user has explicitly unmuted
   const onEndedRef = useRef(onEnded);
   const onErrorRef = useRef(onError);
@@ -72,7 +75,12 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
           onReady: () => { setPlayerReady(true); },
           onStateChange: (event) => {
             if (event.data === window.YT.PlayerState.ENDED) {
+              setPaused(false);
               onEndedRef.current?.();
+            } else if (event.data === window.YT.PlayerState.PAUSED) {
+              setPaused(true);
+            } else if (event.data === window.YT.PlayerState.PLAYING) {
+              setPaused(false);
             }
           },
           onError: (event) => {
@@ -96,6 +104,7 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
   useEffect(() => {
     if (!playerRef.current || !playerReady) return;
     if (videoId) {
+      setPaused(false);
       playerRef.current.loadVideoById(videoId);
       // Re-apply unmute if user already unmuted — YouTube can reset mute on loadVideoById
       if (unmutedByUserRef.current) {
@@ -103,6 +112,7 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
         playerRef.current.setVolume(80);
       }
     } else {
+      setPaused(false);
       playerRef.current.stopVideo();
     }
   }, [videoId, playerReady]);
@@ -122,5 +132,15 @@ export function useYoutubePlayer({ containerId, videoId, onEnded, onError }: Use
     }
   }, []);
 
-  return { playerReady, muted, unmute, stop };
+  const togglePause = useCallback(() => {
+    if (!playerRef.current) return;
+    const state = playerRef.current.getPlayerState();
+    if (state === window.YT.PlayerState.PLAYING) {
+      playerRef.current.pauseVideo();
+    } else {
+      playerRef.current.playVideo();
+    }
+  }, []);
+
+  return { playerReady, muted, paused, unmute, stop, togglePause };
 }

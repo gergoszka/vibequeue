@@ -99,10 +99,5 @@ declare module 'express-session' {
   }
 }
 
-// ─── connect-sqlite3 shim (no official @types) ───────────────────────────────
-// The actual declaration is in src/connect-sqlite3.d.ts so it compiles as a
-// project-level ambient module (not augmenting an untyped module).
-
-
 // ─── Express handler alias ───────────────────────────────────────────────────
 export type Handler = (req: Request, res: Response, next: NextFunction) => void | Promise<void>;

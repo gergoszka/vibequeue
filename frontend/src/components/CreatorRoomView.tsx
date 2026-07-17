@@ -18,6 +18,7 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
   const { room, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch } = useRoom();
   const [advancing, setAdvancing] = useState(false);
   const [skipError, setSkipError] = useState<string | null>(null);
+  const [playlistOpen, setPlaylistOpen] = useState(false);
 
   // Heartbeat: keep the room alive every 2 minutes
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
     await handleEnded();
   }, [handleEnded]);
 
-  const { muted, unmute, stop } = useYoutubePlayer({
+  const { muted, paused, unmute, stop, togglePause } = useYoutubePlayer({
     containerId: PLAYER_CONTAINER_ID,
     videoId: nowPlaying?.youtubeVideoId ?? null,
     onEnded: handleEnded,
@@ -86,6 +87,22 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
           <p className="text-center text-red-400 text-xs">{skipError}</p>
         )}
 
+        {/* Mobile playlist — collapsible, above search */}
+        <div className="lg:hidden">
+          <button
+            onClick={() => setPlaylistOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-2 bg-gray-800 rounded-lg text-white text-sm font-medium"
+          >
+            <span>Playlists</span>
+            <span>{playlistOpen ? '▲' : '▼'}</span>
+          </button>
+          {playlistOpen && (
+            <div className="mt-2">
+              <PlaylistBrowser roomCode={room?.code ?? ''} tokensRemaining={null} onSongAdded={refetch} />
+            </div>
+          )}
+        </div>
+
         <SearchPanel tokensRemaining={null} onSongAdded={refetch} />
 
         <QueueDisplay
@@ -96,6 +113,8 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
           onSkip={handleSkip}
           isMuted={muted}
           onUnmute={unmute}
+          isPaused={paused}
+          onTogglePause={togglePause}
         />
       </div>
 

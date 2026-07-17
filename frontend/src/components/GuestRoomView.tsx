@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useRoom } from '../contexts/RoomContext';
 import QueueDisplay from './QueueDisplay';
 import SearchPanel from './SearchPanel';
@@ -11,7 +12,8 @@ interface GuestRoomViewProps {
 }
 
 const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
-  const { room, guest, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch, tokensRemaining } = useRoom();
+  const { room, guest, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch, tokensRemaining, refreshTokenStatus } = useRoom();
+  const [playlistOpen, setPlaylistOpen] = useState(false);
 
   return (
     <div className="flex gap-4 min-h-[calc(100vh-8rem)]">
@@ -21,6 +23,7 @@ const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
           roomCode={room?.code ?? ''}
           tokensRemaining={tokensRemaining}
           onSongAdded={refetch}
+          refreshTokenStatus={refreshTokenStatus}
         />
       </div>
 
@@ -32,6 +35,27 @@ const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
         </div>
 
         <TokenStatus />
+
+        {/* Mobile playlist — collapsible, above search */}
+        <div className="lg:hidden">
+          <button
+            onClick={() => setPlaylistOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-2 bg-gray-800 rounded-lg text-white text-sm font-medium"
+          >
+            <span>Playlists</span>
+            <span>{playlistOpen ? '▲' : '▼'}</span>
+          </button>
+          {playlistOpen && (
+            <div className="mt-2">
+              <PlaylistBrowser
+                roomCode={room?.code ?? ''}
+                tokensRemaining={tokensRemaining}
+                onSongAdded={refetch}
+                refreshTokenStatus={refreshTokenStatus}
+              />
+            </div>
+          )}
+        </div>
 
         <SearchPanel
           tokensRemaining={tokensRemaining}

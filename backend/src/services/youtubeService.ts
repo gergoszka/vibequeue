@@ -227,62 +227,69 @@ export async function getPlaylistItemsWithDuration(
   pageToken?: string,
   musicOnly = false
 ): Promise<{ items: PlaylistItemWithDuration[]; nextPageToken: string | undefined }> {
-  const params = new URLSearchParams({
-    part: 'snippet',
-    playlistId,
-    maxResults: '50',
-  });
-  if (pageToken) params.set('pageToken', pageToken);
+  // When musicOnly filtering is active, a single YouTube page can yield very few results
+  // after non-music items are removed. Keep consuming pages until we have enough items.
+  const TARGET = musicOnly ? 20 : 0;
+  const MAX_PAGES = 2;
 
-  const response = await fetch(`${YOUTUBE_PLAYLIST_ITEMS_URL}?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const allItems: PlaylistItemWithDuration[] = [];
+  let cursor: string | undefined = pageToken;
+  let pagesConsumed = 0;
 
-  const data = (await response.json()) as Record<string, unknown>;
+  do {
+    const params = new URLSearchParams({ part: 'snippet', playlistId, maxResults: '50' });
+    if (cursor) params.set('pageToken', cursor);
 
-  if (!response.ok) {
-    const errObj = data.error as Record<string, unknown> | undefined;
-    const detail = (errObj?.message as string | undefined) || response.statusText;
-    throw new Error(`Playlist fetch failed: ${detail}`);
-  }
+    const response = await fetch(`${YOUTUBE_PLAYLIST_ITEMS_URL}?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = (await response.json()) as Record<string, unknown>;
 
-  const rawItems = (data.items as Array<Record<string, unknown>>) || [];
-  const basicItems: PlaylistItem[] = [];
+    if (!response.ok) {
+      const errObj = data.error as Record<string, unknown> | undefined;
+      const detail = (errObj?.message as string | undefined) || response.statusText;
+      throw new Error(`Playlist fetch failed: ${detail}`);
+    }
 
-  for (const item of rawItems) {
-    const snippet = item.snippet as Record<string, unknown> | undefined;
-    const resourceId = snippet?.resourceId as Record<string, unknown> | undefined;
-    const videoId = resourceId?.videoId as string | undefined;
-    const title = snippet?.title as string | undefined;
-    if (!videoId || !title || title === 'Deleted video' || title === 'Private video') continue;
-    const thumbnails = snippet?.thumbnails as Record<string, unknown> | undefined;
-    const medium = thumbnails?.medium as Record<string, unknown> | undefined;
-    const defaultThumb = thumbnails?.default as Record<string, unknown> | undefined;
-    const thumbnailUrl =
-      (medium?.url as string | undefined) ||
-      (defaultThumb?.url as string | undefined) ||
-      null;
-    basicItems.push({ videoId, title, thumbnailUrl });
-  }
+    const rawItems = (data.items as Array<Record<string, unknown>>) || [];
+    const basicItems: PlaylistItem[] = [];
 
-  // Enrich with duration (and categoryId when musicOnly filtering is needed)
-  const videoIds = basicItems.map((i) => i.videoId);
-  const detailsMap = videoIds.length > 0 ? await getVideoDetails(videoIds, accessToken) : new Map();
+    for (const item of rawItems) {
+      const snippet = item.snippet as Record<string, unknown> | undefined;
+      const resourceId = snippet?.resourceId as Record<string, unknown> | undefined;
+      const videoId = resourceId?.videoId as string | undefined;
+      const title = snippet?.title as string | undefined;
+      if (!videoId || !title || title === 'Deleted video' || title === 'Private video') continue;
+      const thumbnails = snippet?.thumbnails as Record<string, unknown> | undefined;
+      const medium = thumbnails?.medium as Record<string, unknown> | undefined;
+      const defaultThumb = thumbnails?.default as Record<string, unknown> | undefined;
+      const thumbnailUrl =
+        (medium?.url as string | undefined) ||
+        (defaultThumb?.url as string | undefined) ||
+        null;
+      basicItems.push({ videoId, title, thumbnailUrl });
+    }
 
-  const items: PlaylistItemWithDuration[] = basicItems
-    .filter((i) => {
-      if (!musicOnly) return true;
-      return detailsMap.get(i.videoId)?.categoryId === '10'; // YouTube Music category
-    })
-    .map((i) => ({
-      ...i,
-      durationSeconds: detailsMap.get(i.videoId)?.durationSeconds ?? 0,
-    }));
+    const videoIds = basicItems.map((i) => i.videoId);
+    const detailsMap = videoIds.length > 0 ? await getVideoDetails(videoIds, accessToken) : new Map();
 
-  return {
-    items,
-    nextPageToken: data.nextPageToken as string | undefined,
-  };
+    const pageItems: PlaylistItemWithDuration[] = basicItems
+      .filter((i) => {
+        if (!musicOnly) return true;
+        return detailsMap.get(i.videoId)?.categoryId === '10'; // YouTube Music category
+      })
+      .map((i) => ({
+        ...i,
+        durationSeconds: detailsMap.get(i.videoId)?.durationSeconds ?? 0,
+      }));
+
+    allItems.push(...pageItems);
+    cursor = data.nextPageToken as string | undefined;
+    pagesConsumed++;
+
+  } while (musicOnly && allItems.length < TARGET && cursor && pagesConsumed < MAX_PAGES);
+
+  return { items: allItems, nextPageToken: cursor };
 }
 
 /**

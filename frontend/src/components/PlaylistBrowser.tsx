@@ -17,10 +17,16 @@ interface PlaylistItem {
   durationSeconds: number;
 }
 
+interface PlaylistItemCache {
+  items: PlaylistItem[];
+  nextPageToken?: string;
+}
+
 interface PlaylistBrowserProps {
   roomCode: string;
   tokensRemaining: number | null;
   onSongAdded: () => void;
+  refreshTokenStatus?: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -30,7 +36,7 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded }: PlaylistBrowserProps) {
+export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded, refreshTokenStatus }: PlaylistBrowserProps) {
   const { logout } = useAuth();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [nextPlaylistPageToken, setNextPlaylistPageToken] = useState<string | undefined>();
@@ -40,10 +46,12 @@ export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded
   const [reconnecting, setReconnecting] = useState(false);
 
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
-  const [items, setItems] = useState<PlaylistItem[]>([]);
-  const [nextItemPageToken, setNextItemPageToken] = useState<string | undefined>();
+  const [playlistCache, setPlaylistCache] = useState<Record<string, PlaylistItemCache>>({});
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemError, setItemError] = useState<string | null>(null);
+
+  const items = selectedPlaylist ? (playlistCache[selectedPlaylist.playlistId]?.items ?? []) : [];
+  const nextItemPageToken = selectedPlaylist ? playlistCache[selectedPlaylist.playlistId]?.nextPageToken : undefined;
 
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
@@ -119,13 +127,14 @@ export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded
   const openPlaylist = useCallback(async (playlist: Playlist) => {
     if (selectedPlaylist?.playlistId === playlist.playlistId) {
       setSelectedPlaylist(null);
-      setItems([]);
       return;
     }
     setSelectedPlaylist(playlist);
-    setItems([]);
-    setNextItemPageToken(undefined);
     setItemError(null);
+
+    // Return early if already cached
+    if (playlistCache[playlist.playlistId]) return;
+
     setLoadingItems(true);
     try {
       const params = new URLSearchParams();
@@ -140,19 +149,23 @@ export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded
         return;
       }
       const data = await res.json() as { items: PlaylistItem[]; nextPageToken?: string };
-      setItems(data.items);
-      setNextItemPageToken(data.nextPageToken);
+      setPlaylistCache(prev => ({
+        ...prev,
+        [playlist.playlistId]: { items: data.items, nextPageToken: data.nextPageToken },
+      }));
     } catch {
       setItemError('Could not load playlist items.');
     } finally {
       setLoadingItems(false);
     }
-  }, [selectedPlaylist]);
+  }, [selectedPlaylist, playlistCache]);
 
   const loadMoreItems = useCallback(async () => {
-    if (!selectedPlaylist || !nextItemPageToken) return;
+    if (!selectedPlaylist) return;
+    const cached = playlistCache[selectedPlaylist.playlistId];
+    if (!cached?.nextPageToken) return;
     try {
-      const params = new URLSearchParams({ pageToken: nextItemPageToken });
+      const params = new URLSearchParams({ pageToken: cached.nextPageToken });
       if (selectedPlaylist.isLikedSongs) params.set('musicOnly', 'true');
       const res = await fetch(
         `${API_BASE}/api/youtube/playlists/${selectedPlaylist.playlistId}/items?${params.toString()}`,
@@ -160,12 +173,17 @@ export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded
       );
       if (!res.ok) return;
       const data = await res.json() as { items: PlaylistItem[]; nextPageToken?: string };
-      setItems((prev) => [...prev, ...data.items]);
-      setNextItemPageToken(data.nextPageToken);
+      setPlaylistCache(prev => ({
+        ...prev,
+        [selectedPlaylist.playlistId]: {
+          items: [...(prev[selectedPlaylist.playlistId]?.items ?? []), ...data.items],
+          nextPageToken: data.nextPageToken,
+        },
+      }));
     } catch {
       // ignore
     }
-  }, [selectedPlaylist, nextItemPageToken]);
+  }, [selectedPlaylist, playlistCache]);
 
   const handleAdd = useCallback(async (item: PlaylistItem) => {
     if (!hasTokens || addingRef.current) return;
@@ -187,6 +205,7 @@ export default function PlaylistBrowser({ roomCode, tokensRemaining, onSongAdded
         setAddedIds((prev) => new Set([...prev, item.videoId]));
         setTimeout(() => setAddedIds((prev) => { const n = new Set(prev); n.delete(item.videoId); return n; }), 2000);
         onSongAdded();
+        refreshTokenStatus?.();
       }
     } catch {
       // ignore

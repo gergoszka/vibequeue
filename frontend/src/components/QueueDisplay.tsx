@@ -15,9 +15,13 @@ interface QueueDisplayProps {
   isMuted?: boolean;
   /** Creator-only: unmute the audio player */
   onUnmute?: () => void;
+  /** Creator-only: whether the audio player is currently paused */
+  isPaused?: boolean;
+  /** Creator-only: toggle pause/resume */
+  onTogglePause?: () => void;
 }
 
-export default function QueueDisplay({ nowPlaying, upcomingEntries, isLoading, onRefetch, onSkip, isMuted, onUnmute }: QueueDisplayProps) {
+export default function QueueDisplay({ nowPlaying, upcomingEntries, isLoading, onRefetch, onSkip, isMuted, onUnmute, isPaused, onTogglePause }: QueueDisplayProps) {
   const { room, isCreator } = useRoom();
   const { del } = useApi();
 
@@ -72,32 +76,63 @@ export default function QueueDisplay({ nowPlaying, upcomingEntries, isLoading, o
           <SongProgressBar
             startedPlayingAt={nowPlaying.startedPlayingAt}
             durationSeconds={nowPlaying.durationSeconds}
+            isPaused={isPaused}
           />
 
           {/* Host controls */}
           {isCreator && (
-            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700">
-              {/* Audio enable — only shown while muted (initial autoplay state) */}
-              {isMuted && (
-                <button
-                  onClick={onUnmute}
-                  className="text-xs px-2 py-1 rounded border border-yellow-500/40 text-yellow-400 hover:border-yellow-400 transition"
-                  title="Enable audio"
-                >
-                  🔇 Enable audio
-                </button>
-              )}
-              {!isMuted && isMuted !== undefined && (
-                <span className="text-xs text-green-400">🔊 Playing</span>
-              )}
+            <div className="flex items-center mt-3 pt-3 border-t border-gray-700">
+              {/* Left — audio status */}
+              <div className="flex-1">
+                {isMuted && (
+                  <button
+                    onClick={onUnmute}
+                    className="w-11 h-11 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/50 text-white transition-all duration-150 shadow-md hover:shadow-white/10 hover:scale-105 active:scale-95"
+                    title="Enable audio"
+                  >
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                      <path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.796 8.796 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25A6.97 6.97 0 0 1 14 18.98v2.06A8.99 8.99 0 0 0 17.73 19l2 2L21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z" />
+                    </svg>
+                  </button>
+                )}
+                {!isMuted && isMuted !== undefined && (
+                  <div className="w-11 h-11 flex items-center justify-center rounded-full bg-white/5 border border-white/10 text-green-400">
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                      <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
+                    </svg>
+                  </div>
+                )}
+              </div>
 
+              {/* Center — pause / resume */}
               <button
-                onClick={onSkip}
-                className="ml-auto text-xs px-3 py-1 rounded border border-gray-600 text-gray-300 hover:text-white hover:border-gray-400 transition"
-                title="Skip to next song"
+                onClick={onTogglePause}
+                className="w-11 h-11 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/50 text-white transition-all duration-150 shadow-md hover:shadow-white/10 hover:scale-105 active:scale-95"
+                title={isPaused ? 'Resume' : 'Pause'}
               >
-                ⏭ Skip
+                {isPaused ? (
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 translate-x-px">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                  </svg>
+                )}
               </button>
+
+              {/* Right — skip */}
+              <div className="flex-1 flex justify-end">
+                <button
+                  onClick={onSkip}
+                  className="w-11 h-11 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/50 text-white transition-all duration-150 shadow-md hover:shadow-white/10 hover:scale-105 active:scale-95"
+                  title="Skip to next song"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                    <path d="M4,18 L13,12 L4,6 Z M13,6 L13,18 L22,12 Z" />
+                  </svg>
+                </button>
+              </div>
             </div>
           )}
         </div>
