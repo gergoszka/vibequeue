@@ -2,11 +2,19 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRoom } from '../contexts/RoomContext';
 import { useApi } from '../hooks/useApi';
+import { useLongPress } from '../hooks/useLongPress';
+import type { RoomMember } from '../hooks/useWebSocket';
 
-export default function CreatorControls() {
+interface CreatorControlsProps {
+  members?: RoomMember[];
+}
+
+export default function CreatorControls({ members = [] }: CreatorControlsProps) {
   const { room } = useRoom();
   const { del, post } = useApi();
   const navigate = useNavigate();
+  const [showTooltip, setShowTooltip] = useState(false);
+  const longPress = useLongPress(() => { if (window.innerWidth < 1024) setShowTooltip(true); });
   const [copied, setCopied] = useState<boolean>(false);
   const [ending, setEnding] = useState<boolean>(false);
   const [playlistUrl, setPlaylistUrl] = useState<string>('');
@@ -21,7 +29,6 @@ export default function CreatorControls() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback: show prompt with the URL
       prompt('Share this link:', shareUrl);
     }
   };
@@ -59,9 +66,33 @@ export default function CreatorControls() {
     <div className="bg-gray-800 rounded-xl p-4 space-y-4">
       {/* Room code + share */}
       <div className="flex items-center justify-between">
-        <div>
+        <div className="relative">
           <p className="text-xs text-gray-400 uppercase tracking-wide">Room Code</p>
-          <p className="text-3xl font-bold text-white tracking-widest">{room?.code}</p>
+          <p className="text-3xl font-bold text-white tracking-widest select-none" {...longPress}>
+            {room?.code}
+          </p>
+
+          {showTooltip && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowTooltip(false)} />
+              <div className="absolute top-full left-0 mt-2 z-20 bg-gray-700 border border-gray-600 rounded-lg shadow-xl p-3 min-w-[180px]">
+                <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">In this room</p>
+                {members.length === 0 ? (
+                  <p className="text-xs text-gray-500">No members yet</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {members.map(m => (
+                      <div key={m.userId} className="flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
+                        <span className="text-sm text-white truncate">{m.displayName}</span>
+                        {m.role === 'host' && <span className="text-xs text-gray-500 ml-auto">host</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
         <button
           onClick={handleCopyLink}

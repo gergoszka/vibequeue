@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useRoom } from '../contexts/RoomContext';
+import { useLongPress } from '../hooks/useLongPress';
 import QueueDisplay from './QueueDisplay';
 import SearchPanel from './SearchPanel';
 import TokenStatus from './TokenStatus';
@@ -14,6 +15,8 @@ interface GuestRoomViewProps {
 const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
   const { room, guest, nowPlaying, upcomingEntries, queueLoading: isLoading, refetchQueue: refetch, tokensRemaining, refreshTokenStatus } = useRoom();
   const [playlistOpen, setPlaylistOpen] = useState(false);
+  const [showTooltip, setShowTooltip] = useState(false);
+  const roomCodeLongPress = useLongPress(() => { if (window.innerWidth < 1024) setShowTooltip(true); });
 
   return (
     <div className="flex gap-4 min-h-[calc(100vh-8rem)]">
@@ -30,7 +33,33 @@ const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
       {/* Center — main content */}
       <div className="flex-1 min-w-0 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Room: {room?.code}</h2>
+          <div className="relative">
+            <h2 className="text-lg font-semibold text-white">
+              <span className="select-none" {...roomCodeLongPress}>Room</span>
+              <span>: {room?.code}</span>
+            </h2>
+            {showTooltip && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowTooltip(false)} />
+                <div className="absolute top-full left-0 mt-2 z-20 bg-gray-700 border border-gray-600 rounded-lg shadow-xl p-3 min-w-[180px]">
+                  <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">In this room</p>
+                  {wsMembers.length === 0 ? (
+                    <p className="text-xs text-gray-500">No members yet</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {wsMembers.map(m => (
+                        <div key={m.userId} className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
+                          <span className="text-sm text-white truncate">{m.displayName}</span>
+                          {m.role === 'host' && <span className="text-xs text-gray-500 ml-auto">host</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
           <span className="text-xs text-gray-400">{guest?.displayName}</span>
         </div>
 
@@ -76,6 +105,7 @@ const GuestRoomView: React.FC<GuestRoomViewProps> = ({ wsMembers }) => {
         <RoomMembersList roomCode={room?.code ?? ''} members={wsMembers} />
       </div>
     </div>
+
   );
 };
 

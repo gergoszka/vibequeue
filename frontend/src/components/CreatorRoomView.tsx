@@ -78,7 +78,7 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
 
       {/* Center — main content */}
       <div className="flex-1 min-w-0 space-y-4">
-        <CreatorControls />
+        <CreatorControls members={wsMembers} />
 
         {/* Hidden YouTube player — provides background audio, no video displayed */}
         <YoutubePlayer />
@@ -123,5 +123,6 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
         <RoomMembersList roomCode={room?.code ?? ''} members={wsMembers} />
       </div>
     </div>
+
   );
 }
