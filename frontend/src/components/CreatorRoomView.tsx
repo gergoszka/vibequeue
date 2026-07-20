@@ -60,6 +60,8 @@ export default function CreatorRoomView({ wsMembers }: CreatorRoomViewProps) {
   const { muted, paused, unmute, stop, togglePause } = useYoutubePlayer({
     containerId: PLAYER_CONTAINER_ID,
     videoId: nowPlaying?.youtubeVideoId ?? null,
+    trackTitle: nowPlaying?.title,
+    trackThumbnailUrl: nowPlaying?.thumbnailUrl,
     onEnded: handleEnded,
     onError: handleError,
   });

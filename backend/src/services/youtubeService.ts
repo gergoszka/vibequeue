@@ -1,16 +1,8 @@
-const YOUTUBE_SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search';
+const YOUTUBE_INNERTUBE_SEARCH_URL = 'https://www.youtube.com/youtubei/v1/search';
 const YOUTUBE_VIDEOS_URL = 'https://www.googleapis.com/youtube/v3/videos';
 const YOUTUBE_PLAYLIST_ITEMS_URL = 'https://www.googleapis.com/youtube/v3/playlistItems';
 const YOUTUBE_PLAYLISTS_URL = 'https://www.googleapis.com/youtube/v3/playlists';
 const YOUTUBE_CHANNELS_URL = 'https://www.googleapis.com/youtube/v3/channels';
-
-interface VideoSearchResult {
-  videoId: string;
-  title: string;
-  thumbnailUrl: string | null;
-  channelTitle: string;
-  liveBroadcastContent: string;
-}
 
 interface VideoDetails {
   durationSeconds: number;
@@ -293,51 +285,6 @@ export async function getPlaylistItemsWithDuration(
 }
 
 /**
- * Search YouTube for music videos matching a query.
- */
-export async function searchVideos(query: string, accessToken: string): Promise<VideoSearchResult[]> {
-  const params = new URLSearchParams({
-    part: 'snippet',
-    type: 'video',
-    videoCategoryId: '10',
-    maxResults: '10',
-    q: query,
-  });
-
-  const response = await fetch(`${YOUTUBE_SEARCH_URL}?${params.toString()}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-
-  const data = (await response.json()) as Record<string, unknown>;
-
-  if (!response.ok) {
-    const errObj = data.error as Record<string, unknown> | undefined;
-    const errorsArr = errObj?.errors as Array<Record<string, unknown>> | undefined;
-    const detail =
-      (errObj?.message as string | undefined) ||
-      (errorsArr?.[0]?.message as string | undefined) ||
-      response.statusText;
-    throw new Error(`YouTube search failed: ${detail}`);
-  }
-
-  const items = (data.items as Array<Record<string, unknown>>) || [];
-  return items.map((item) => {
-    const id = item.id as Record<string, unknown> | undefined;
-    const snippet = item.snippet as Record<string, unknown> | undefined;
-    const thumbnails = snippet?.thumbnails as Record<string, unknown> | undefined;
-    const medium = thumbnails?.medium as Record<string, unknown> | undefined;
-    const defaultThumb = thumbnails?.default as Record<string, unknown> | undefined;
-    return {
-      videoId: (id?.videoId as string | undefined) ?? '',
-      title: (snippet?.title as string | undefined) ?? '',
-      thumbnailUrl: (medium?.url as string | undefined) || (defaultThumb?.url as string | undefined) || null,
-      channelTitle: (snippet?.channelTitle as string | undefined) ?? '',
-      liveBroadcastContent: (snippet?.liveBroadcastContent as string | undefined) ?? 'none',
-    };
-  });
-}
-
-/**
  * Fetch content details for a batch of video IDs.
  */
 export async function getVideoDetails(
@@ -382,13 +329,19 @@ export async function getVideoDetails(
   return detailsMap;
 }
 
+function parseDurationString(duration: string): number {
+  const parts = duration.split(':').map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
+}
+
 /**
- * Search for music videos and enrich each result with duration.
- * Filters out live streams.
+ * Search YouTube using the internal innertube API (no quota, no API key).
+ * Videos without a duration (live streams) are filtered out automatically.
  */
 export async function searchWithDetails(
-  query: string,
-  accessToken: string
+  query: string
 ): Promise<
   Array<{
     videoId: string;
@@ -398,14 +351,36 @@ export async function searchWithDetails(
     durationSeconds: number;
   }>
 > {
-  const searchResults = await searchVideos(query, accessToken);
+  const body = {
+    context: { client: { clientName: 'WEB', clientVersion: '2.20240101', hl: 'en' } },
+    query,
+  };
 
-  if (searchResults.length === 0) {
-    return [];
+  const response = await fetch(YOUTUBE_INNERTUBE_SEARCH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`YouTube search failed: ${response.status} ${response.statusText}`);
   }
 
-  const videoIds = searchResults.map((r) => r.videoId).filter(Boolean);
-  const detailsMap = await getVideoDetails(videoIds, accessToken);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = (await response.json()) as any;
+
+  const sections: unknown[] =
+    data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
+      ?.sectionListRenderer?.contents ?? [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const items: any[] = sections.flatMap(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s: any) => s?.itemSectionRenderer?.contents ?? []
+  );
 
   const results: Array<{
     videoId: string;
@@ -415,26 +390,24 @@ export async function searchWithDetails(
     durationSeconds: number;
   }> = [];
 
-  for (const result of searchResults) {
-    // Filter out live streams by liveBroadcastContent flag
-    if (result.liveBroadcastContent === 'live') {
-      continue;
-    }
+  for (const item of items) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vr = item?.videoRenderer as any;
+    if (!vr?.videoId) continue;
 
-    const details = detailsMap.get(result.videoId);
-
-    // Filter out live streams by duration === 'P0D' (YouTube marks live as zero-length)
-    if (details && details.duration === 'P0D') {
-      continue;
-    }
+    // Live streams have no lengthText — skip them
+    const durationStr: string | undefined = vr.lengthText?.simpleText;
+    if (!durationStr) continue;
 
     results.push({
-      videoId: result.videoId,
-      title: result.title,
-      thumbnailUrl: result.thumbnailUrl,
-      channelTitle: result.channelTitle,
-      durationSeconds: details ? details.durationSeconds : 0,
+      videoId: vr.videoId,
+      title: vr.title?.runs?.[0]?.text ?? '',
+      thumbnailUrl: vr.thumbnail?.thumbnails?.at(-1)?.url ?? null,
+      channelTitle: vr.ownerText?.runs?.[0]?.text ?? '',
+      durationSeconds: parseDurationString(durationStr),
     });
+
+    if (results.length >= 10) break;
   }
 
   return results;

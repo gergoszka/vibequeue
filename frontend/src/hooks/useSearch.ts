@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useApi } from './useApi';
 import { SearchResult } from '../types';
 
@@ -12,6 +12,7 @@ export function useSearch(roomCode: string | undefined): {
   results: SearchResult[];
   isLoading: boolean;
   error: string | null;
+  search: (overrideQuery?: string) => void;
   clearSearch: () => void;
 } {
   const [query, setQuery] = useState<string>('');
@@ -20,30 +21,18 @@ export function useSearch(roomCode: string | undefined): {
   const [error, setError] = useState<string | null>(null);
   const { get } = useApi();
 
-  // Debounced search: fires 300ms after the last query change
-  useEffect(() => {
-    if (!query || query.trim().length < 2) {
-      setResults([]);
-      setError(null);
-      return;
-    }
+  // overrideQuery lets callers pass a freshly-picked suggestion before state has updated
+  const search = useCallback((overrideQuery?: string) => {
+    const q = (overrideQuery ?? query).trim();
+    if (!q || q.length < 2) return;
     setIsLoading(true);
+    setResults([]);
     setError(null);
-
-    const timerId = setTimeout(async () => {
-      try {
-        const data = await get<SearchResponse>(`/api/search?q=${encodeURIComponent(query.trim())}&roomCode=${roomCode}`);
-        setResults(data.results || []);
-      } catch {
-        setError('Search failed, try again');
-        setResults([]);
-      } finally {
-        setIsLoading(false);
-      }
-    }, 300);
-
-    return () => clearTimeout(timerId);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- useApi functions are recreated each render but referentially stable in behaviour
+    get<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&roomCode=${roomCode}`)
+      .then((data) => setResults(data.results || []))
+      .catch(() => { setError('Search failed, try again'); setResults([]); })
+      .finally(() => setIsLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, roomCode]);
 
   const clearSearch = useCallback(() => {
@@ -52,5 +41,5 @@ export function useSearch(roomCode: string | undefined): {
     setError(null);
   }, []);
 
-  return { query, setQuery, results, isLoading, error, clearSearch };
+  return { query, setQuery, results, isLoading, error, search, clearSearch };
 }
