@@ -61,6 +61,7 @@ export interface PublicQueueEntry {
   thumbnailUrl: string | null;
   durationSeconds: number | null;
   addedByDisplayName: string;
+  addedByCurrentUser: boolean;
   status: 'pending' | 'playing' | 'played' | 'removed';
   source: 'user' | 'playlist';
   position: number;

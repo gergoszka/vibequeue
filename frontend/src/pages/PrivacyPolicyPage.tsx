@@ -11,7 +11,7 @@ export default function PrivacyPolicyPage() {
 
         <Section title="Overview">
           <p>
-            VibeQueue ("we", "us", "our") is a collaborative music queue application. This policy
+            PeresParty ("we", "us", "our") is a collaborative music queue application. This policy
             explains what data we collect, why we collect it, and how it is handled when you sign
             in with your Google account.
           </p>
@@ -60,7 +60,7 @@ export default function PrivacyPolicyPage() {
 
         <Section title="Google API Services">
           <p>
-            VibeQueue uses the YouTube Data API v3. Our use of data received from Google APIs
+            PeresParty uses the YouTube Data API v3. Our use of data received from Google APIs
             complies with the{' '}
             <a
               href="https://developers.google.com/terms/api-services-user-data-policy"
@@ -84,7 +84,7 @@ export default function PrivacyPolicyPage() {
 
         <Section title="Revoking Access">
           <p>
-            You can revoke VibeQueue's access to your Google account at any time by visiting{' '}
+            You can revoke PeresParty's access to your Google account at any time by visiting{' '}
             <a
               href="https://myaccount.google.com/permissions"
               target="_blank"
@@ -93,7 +93,7 @@ export default function PrivacyPolicyPage() {
             >
               Google Account Permissions
             </a>{' '}
-            and removing VibeQueue from the list of connected apps.
+            and removing PeresParty from the list of connected apps.
           </p>
         </Section>
 
@@ -107,7 +107,7 @@ export default function PrivacyPolicyPage() {
 
         <Section title="Children's Privacy">
           <p>
-            VibeQueue is not directed at children under 13. We do not knowingly collect personal
+            PeresParty is not directed at children under 13. We do not knowingly collect personal
             data from children under 13.
           </p>
         </Section>

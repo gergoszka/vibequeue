@@ -37,7 +37,7 @@ export function buildAuthUrl({ redirectUri, state }: { redirectUri: string; stat
     response_type: 'code',
     scope: YOUTUBE_SCOPE,
     access_type: 'offline',
-    prompt: 'select_account consent',
+    prompt: 'select_account',
   });
 
   if (state !== undefined && state !== null) {

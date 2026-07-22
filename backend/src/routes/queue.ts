@@ -10,7 +10,8 @@ const router = express.Router({ mergeParams: true });
 router.get('/', (req: Request, res: Response, next: NextFunction): void => {
   try {
     const code = String(req.params.code).toUpperCase();
-    const entries = getQueue(code);
+    const userId = req.session.youtube?.userId;
+    const entries = getQueue(code, userId);
     res.status(200).json({ entries });
   } catch (err) {
     if (err instanceof AppError && err.statusCode === 404) {

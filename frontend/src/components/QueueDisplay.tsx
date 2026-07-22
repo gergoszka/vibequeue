@@ -147,7 +147,7 @@ export default function QueueDisplay({ nowPlaying, upcomingEntries, isLoading, o
               key={entry.id}
               entry={entry}
               index={i + 1}
-              onRemove={isCreator ? handleRemove : undefined}
+              onRemove={entry.addedByCurrentUser ? handleRemove : undefined}
             />
           ))}
         </div>

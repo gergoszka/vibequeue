@@ -11,7 +11,7 @@ export type AdvanceQueueResult =
   | { type: 'empty' }
   | { type: 'fetch_more_playlist'; playlistId: string; pageToken: string };
 
-function formatEntry(row: QueueEntryRow & { display_name?: string | null }): PublicQueueEntry {
+function formatEntry(row: QueueEntryRow & { display_name?: string | null }, requestingUserId?: string): PublicQueueEntry {
   return {
     id: row.id,
     youtubeVideoId: row.youtube_video_id,
@@ -19,6 +19,7 @@ function formatEntry(row: QueueEntryRow & { display_name?: string | null }): Pub
     thumbnailUrl: row.thumbnail_url || null,
     durationSeconds: row.duration_seconds || null,
     addedByDisplayName: row.display_name || 'Host',
+    addedByCurrentUser: !!requestingUserId && row.added_by_user_id === requestingUserId,
     status: row.status,
     source: row.source ?? 'user',
     position: row.position,
@@ -31,7 +32,7 @@ function formatEntry(row: QueueEntryRow & { display_name?: string | null }): Pub
  *
  * @throws {AppError} 404 if room not found
  */
-export function getQueue(roomCode: string): PublicQueueEntry[] {
+export function getQueue(roomCode: string, requestingUserId?: string): PublicQueueEntry[] {
   const room = db
     .prepare('SELECT id FROM rooms WHERE code = ?')
     .get(roomCode.toUpperCase()) as Pick<RoomRow, 'id'> | undefined;
@@ -61,7 +62,7 @@ export function getQueue(roomCode: string): PublicQueueEntry[] {
     )
     .all(room.id) as QueueEntryRow[];
 
-  return rows.map(formatEntry);
+  return rows.map(row => formatEntry(row, requestingUserId));
 }
 
 /**
@@ -167,8 +168,7 @@ export function addToQueue(
 
 /**
  * Remove (soft-delete) a queue entry.
- * - Host may remove any non-removed entry.
- * - Guest may only remove their own 'pending' entries.
+ * Only the user who added the entry may remove it, and only while it is 'pending'.
  *
  * @throws {AppError} 404, 403
  */
@@ -185,12 +185,8 @@ export function removeEntry(roomCode: string, entryId: string, userId: string): 
 
   if (!entry || entry.status === 'removed') throw new AppError('Queue entry not found', 404);
 
-  const hostAccess = isCreator(room.id, userId);
-
-  if (!hostAccess) {
-    if (entry.added_by_user_id !== userId) throw new AppError('Forbidden', 403);
-    if (entry.status !== 'pending') throw new AppError('Forbidden', 403);
-  }
+  if (entry.added_by_user_id !== userId) throw new AppError('Forbidden', 403);
+  if (entry.status !== 'pending') throw new AppError('Forbidden', 403);
 
   const wasPlaying = entry.status === 'playing';
 

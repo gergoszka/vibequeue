@@ -84,7 +84,6 @@ export default function SearchPanel({ onSongAdded, tokensRemaining }: SearchPane
       setTimeout(() => setAddedIds(prev => { const n = new Set(prev); n.delete(result.videoId); return n; }), 2000);
       onSongAdded();
       refreshTokenStatus();
-      clearSearch();
     } catch (err) {
       console.error('Add to queue failed:', (err as Error).message);
     } finally {

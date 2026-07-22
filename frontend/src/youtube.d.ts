@@ -4,6 +4,7 @@ interface YTPlayerVars {
   controls?: 0 | 1;
   rel?: 0 | 1;
   modestbranding?: 0 | 1;
+  start?: number;
 }
 
 interface YTPlayerOptions {
@@ -18,9 +19,19 @@ interface YTPlayerOptions {
   };
 }
 
+interface YTVideoTarget {
+  videoId: string;
+  startSeconds?: number;
+}
+
 interface YTPlayer {
   loadVideoById(videoId: string): void;
+  loadVideoById(target: YTVideoTarget): void;
+  cueVideoById(target: YTVideoTarget): void;
+  playVideo(): void;
+  pauseVideo(): void;
   stopVideo(): void;
+  getPlayerState(): number;
   unMute(): void;
   setVolume(volume: number): void;
   isMuted(): boolean;

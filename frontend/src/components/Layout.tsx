@@ -1,5 +1,5 @@
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -18,8 +18,8 @@ export default function Layout({ children, wide = false }: LayoutProps) {
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       <header className="sticky top-0 z-10 bg-gray-950/90 backdrop-blur border-b border-gray-800 px-6 py-4">
-        <div className={`${wide ? 'w-full' : 'max-w-2xl mx-auto'} flex items-center justify-between`}>
-          <span className="text-xl font-bold tracking-tight text-white">VibeQueue</span>
+        <div className="w-full flex items-center justify-between">
+          <Link to="/" className="text-xl font-bold tracking-tight text-white hover:text-gray-200 transition-colors">PeresParty</Link>
           {isAuthenticated && youtubeEmail && (
             <div className="flex items-center gap-3">
               <span className="text-sm text-gray-400 hidden sm:block">{youtubeEmail}</span>

@@ -25,13 +25,14 @@ function loadYouTubeAPI(): Promise<void> {
 interface UseYoutubePlayerProps {
   containerId: string;
   videoId: string | null;
+  startedPlayingAt?: number | null;
   trackTitle?: string;
   trackThumbnailUrl?: string | null;
   onEnded?: () => void;
   onError?: (code: number) => void;
 }
 
-export function useYoutubePlayer({ containerId, videoId, trackTitle, trackThumbnailUrl, onEnded, onError }: UseYoutubePlayerProps): {
+export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, trackTitle, trackThumbnailUrl, onEnded, onError }: UseYoutubePlayerProps): {
   playerReady: boolean;
   muted: boolean;
   paused: boolean;
@@ -42,13 +43,23 @@ export function useYoutubePlayer({ containerId, videoId, trackTitle, trackThumbn
   const playerRef = useRef<YTPlayer | null>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const [muted, setMuted] = useState<boolean>(true);
-  const [paused, setPaused] = useState<boolean>(false);
+  // Start paused if a song is already in progress (host returning to the page).
+  const [paused, setPaused] = useState<boolean>(!!startedPlayingAt);
   const unmutedByUserRef = useRef<boolean>(false);
   const wasPlayingRef = useRef<boolean>(false);
   const onEndedRef = useRef(onEnded);
   const onErrorRef = useRef(onError);
+  const startedPlayingAtRef = useRef(startedPlayingAt);
+  const isFirstVideoLoadRef = useRef(true);
   useEffect(() => { onEndedRef.current = onEnded; }, [onEnded]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
+  useEffect(() => { startedPlayingAtRef.current = startedPlayingAt; }, [startedPlayingAt]);
+
+  function getStartSeconds(): number {
+    const sat = startedPlayingAtRef.current;
+    if (!sat) return 0;
+    return Math.max(0, Math.floor((Date.now() - sat) / 1000));
+  }
 
   // --- Silent Web Audio keep-alive ---
   // A near-silent oscillator prevents Android from treating the page as idle audio.
@@ -76,10 +87,11 @@ export function useYoutubePlayer({ containerId, videoId, trackTitle, trackThumbn
     loadYouTubeAPI().then(() => {
       if (destroyed) return;
       if (playerRef.current) {
-        if (videoId) playerRef.current.loadVideoById(videoId);
+        if (videoId) playerRef.current.loadVideoById({ videoId, startSeconds: getStartSeconds() });
         return;
       }
 
+      const initStartSec = getStartSeconds();
       playerRef.current = new window.YT.Player(containerId, {
         height: '180',
         width: '320',
@@ -90,6 +102,7 @@ export function useYoutubePlayer({ containerId, videoId, trackTitle, trackThumbn
           controls: 0,
           rel: 0,
           modestbranding: 1,
+          ...(initStartSec > 0 && { start: initStartSec }),
         },
         events: {
           onReady: () => { setPlayerReady(true); },
@@ -129,11 +142,24 @@ export function useYoutubePlayer({ containerId, videoId, trackTitle, trackThumbn
   useEffect(() => {
     if (!playerRef.current || !playerReady) return;
     if (videoId) {
-      setPaused(false);
-      playerRef.current.loadVideoById(videoId);
-      if (unmutedByUserRef.current) {
-        playerRef.current.unMute();
-        playerRef.current.setVolume(80);
+      const startSec = getStartSeconds();
+      // If this is the first video loaded by this player instance and the song is already
+      // in progress, the host returned to the page — cue at the correct position without
+      // autoplaying so they can resume when ready.
+      const isReturn = isFirstVideoLoadRef.current && startSec > 0;
+      isFirstVideoLoadRef.current = false;
+
+      if (isReturn) {
+        playerRef.current.cueVideoById({ videoId, startSeconds: startSec });
+        setPaused(true);
+        wasPlayingRef.current = false;
+      } else {
+        setPaused(false);
+        playerRef.current.loadVideoById({ videoId, startSeconds: startSec });
+        if (unmutedByUserRef.current) {
+          playerRef.current.unMute();
+          playerRef.current.setVolume(80);
+        }
       }
     } else {
       setPaused(false);
