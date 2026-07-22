@@ -129,32 +129,37 @@ async function runSmoke() {
   assert('Queue has 2 entries', entries.length === 2, `got ${entries.length}`);
   assert('One playing, one pending', entries.some(e => e.status === 'playing') && entries.some(e => e.status === 'pending'));
 
-  // ---- Step 8: Creator advances queue ----
-  console.log('\nStep 8: Creator advances queue');
-  const r8 = await req('POST', `/api/rooms/${roomCode}/queue/advance`, {}, creator);
-  assert('POST /queue/advance → 200', r8.status === 200, `got ${r8.status}: ${JSON.stringify(r8.data)}`);
-  assert('nowPlaying is the second song', r8.data?.nowPlaying?.id === entry2Id, `got ${r8.data?.nowPlaying?.id}`);
+  // ---- Step 8: Guest 1 cannot remove Guest 2's pending song ----
+  console.log('\nStep 8: Guest 1 tries to remove Guest 2\'s song');
+  const r8 = await req('DELETE', `/api/rooms/${roomCode}/queue/${entry2Id}`, null, guest1);
+  assert('DELETE /queue/:id (wrong user) → 403', r8.status === 403, `got ${r8.status}`);
 
-  // ---- Step 9: Creator removes the now-playing song ----
-  console.log('\nStep 9: Creator removes song 2');
-  const r9 = await req('DELETE', `/api/rooms/${roomCode}/queue/${entry2Id}`, null, creator);
-  assert('DELETE /queue/:id (creator) → 204', r9.status === 204, `got ${r9.status}`);
+  // ---- Step 9: Guest 2 removes their own pending song ----
+  console.log('\nStep 9: Guest 2 removes their own song');
+  const r9 = await req('DELETE', `/api/rooms/${roomCode}/queue/${entry2Id}`, null, guest2);
+  assert('DELETE /queue/:id (own song) → 204', r9.status === 204, `got ${r9.status}`);
 
-  // ---- Step 10: Verify room is still active ----
-  console.log('\nStep 10: Verify room still active');
-  const r10 = await req('GET', `/api/rooms/${roomCode}`, null, creator);
-  assert('GET /api/rooms/:code → 200', r10.status === 200, `got ${r10.status}`);
-  assert('Room is active', r10.data?.isActive === 1 || r10.data?.isActive === true);
+  // ---- Step 10: Creator advances queue (song 2 was removed, queue empties) ----
+  console.log('\nStep 10: Creator advances queue');
+  const r10a = await req('POST', `/api/rooms/${roomCode}/queue/advance`, {}, creator);
+  assert('POST /queue/advance → 200', r10a.status === 200, `got ${r10a.status}: ${JSON.stringify(r10a.data)}`);
+  assert('nowPlaying is null (queue empty)', r10a.data?.nowPlaying === null || r10a.data?.nowPlaying === undefined);
 
-  // ---- Step 11: Creator ends the room ----
-  console.log('\nStep 11: Creator ends room');
-  const r11 = await req('DELETE', `/api/rooms/${roomCode}`, null, creator);
-  assert('DELETE /api/rooms/:code → 204', r11.status === 204, `got ${r11.status}: ${JSON.stringify(r11.data)}`);
+  // ---- Step 11: Verify room is still active ----
+  console.log('\nStep 11: Verify room still active');
+  const r11a = await req('GET', `/api/rooms/${roomCode}`, null, creator);
+  assert('GET /api/rooms/:code → 200', r11a.status === 200, `got ${r11a.status}`);
+  assert('Room is active', r11a.data?.isActive === 1 || r11a.data?.isActive === true);
 
-  // ---- Step 12: Verify room is now inactive ----
-  console.log('\nStep 12: Verify room now inactive');
-  const r12 = await req('GET', `/api/rooms/${roomCode}`, null, creator);
-  assert('Room is inactive (404 or isActive=false)', r12.status === 404 || r12.data?.isActive === 0 || r12.data?.isActive === false);
+  // ---- Step 12: Creator ends the room ----
+  console.log('\nStep 12: Creator ends room');
+  const r12 = await req('DELETE', `/api/rooms/${roomCode}`, null, creator);
+  assert('DELETE /api/rooms/:code → 204', r12.status === 204, `got ${r12.status}: ${JSON.stringify(r12.data)}`);
+
+  // ---- Step 13: Verify room is now inactive ----
+  console.log('\nStep 13: Verify room now inactive');
+  const r13 = await req('GET', `/api/rooms/${roomCode}`, null, creator);
+  assert('Room is inactive (404 or isActive=false)', r13.status === 404 || r13.data?.isActive === 0 || r13.data?.isActive === false);
 
   // ---- Summary ----
   console.log(`\n${'─'.repeat(40)}`);
