@@ -188,45 +188,7 @@ export function removeEntry(roomCode: string, entryId: string, userId: string): 
   if (entry.added_by_user_id !== userId) throw new AppError('Forbidden', 403);
   if (entry.status !== 'pending') throw new AppError('Forbidden', 403);
 
-  const wasPlaying = entry.status === 'playing';
-
-  const doRemove = db.transaction((): PublicQueueEntry | null => {
-    db.prepare("UPDATE queue_entries SET status = 'removed' WHERE id = ?").run(entryId);
-
-    if (!wasPlaying) return null;
-
-    const findNext = db.prepare(
-      `SELECT qe.id,
-              qe.youtube_video_id,
-              qe.title,
-              qe.thumbnail_url,
-              qe.duration_seconds,
-              qe.status,
-              qe.source,
-              qe.position,
-              qe.room_id,
-              qe.added_by_user_id,
-              qe.added_at,
-              qe.started_playing_at,
-              u.display_name
-         FROM queue_entries qe
-         LEFT JOIN users u ON u.id = qe.added_by_user_id
-        WHERE qe.room_id = ?
-          AND qe.status = 'pending'
-        ORDER BY CASE WHEN qe.source = 'user' THEN 0 ELSE 1 END ASC, qe.position ASC
-        LIMIT 1`
-    );
-
-    const next = findNext.get(room.id) as QueueEntryRow | undefined;
-    if (!next) return null;
-
-    const nowTs = Date.now();
-    db.prepare("UPDATE queue_entries SET status = 'playing', started_playing_at = ? WHERE id = ?").run(nowTs, next.id);
-    return formatEntry({ ...next, status: 'playing', started_playing_at: nowTs });
-  });
-
-  const nextEntry = doRemove();
-  if (wasPlaying) queueEmitter.emit('now_playing', roomCode.toUpperCase(), nextEntry);
+  db.prepare("UPDATE queue_entries SET status = 'removed' WHERE id = ?").run(entryId);
   queueEmitter.emit('queue_updated', roomCode.toUpperCase());
 }
 
