@@ -200,10 +200,6 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
         wasPlayingRef.current = false;
         if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
         onEndedRef.current?.();
-      } else if (wasPlayingRef.current) {
-        setTimeout(() => {
-          try { playerRef.current?.playVideo(); } catch { /* ignore */ }
-        }, 300);
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
