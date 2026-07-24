@@ -22,6 +22,26 @@ function loadYouTubeAPI(): Promise<void> {
   });
 }
 
+// Build a 1-second silent WAV as a blob URL (computed once).
+// Chrome uses an actual <audio> element — not a Web Audio oscillator — to acquire
+// Android AudioFocus and protect the page from the frozen lifecycle state when
+// the browser is backgrounded. This blob is the src for that element.
+let silentWavUrl: string | null = null;
+function getSilentWavUrl(): string {
+  if (silentWavUrl) return silentWavUrl;
+  const rate = 8000, samples = rate;
+  const buf = new ArrayBuffer(44 + samples);
+  const v = new DataView(buf);
+  const w = (o: number, t: string) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + samples, true); w(8, 'WAVE');
+  w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  w(36, 'data'); v.setUint32(40, samples, true);
+  for (let i = 0; i < samples; i++) v.setUint8(44 + i, 0x80); // 0x80 = silence in 8-bit unsigned PCM
+  silentWavUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  return silentWavUrl;
+}
+
 interface UseYoutubePlayerProps {
   containerId: string;
   videoId: string | null;
@@ -61,23 +81,60 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
     return Math.max(0, Math.floor((Date.now() - sat) / 1000));
   }
 
-  // --- Silent Web Audio keep-alive ---
-  // A near-silent oscillator prevents Android from treating the page as idle audio.
+  // --- Background audio keep-alive ---
+  // Two layers so Chrome on Android doesn't freeze the page when minimized:
+  //
+  //  1. <audio> element (PRIMARY): Chrome uses a real <audio> element to acquire
+  //     Android AudioFocus. Without it, the page can enter the frozen lifecycle
+  //     state on app-switch even though the YouTube IFrame is playing.
+  //
+  //  2. Web Audio oscillator (SECONDARY): inaudible tone that keeps the
+  //     AudioContext alive on browsers that check Web Audio activity.
+  //
+  // Both layers run whenever a song is playing, including the gap between songs
+  // (ENDED → next song loads). They are paused only when the user explicitly
+  // pauses or the queue is empty.
+  //
   // Must be started inside a user-gesture handler (the unmute button).
   const silentAudioRef = useRef<AudioContext | null>(null);
+  const silentAudioElRef = useRef<HTMLAudioElement | null>(null);
+
   const startSilentAudio = useCallback(() => {
     if (silentAudioRef.current) return;
+
+    // Layer 1 — looping <audio> element
+    const el = document.createElement('audio');
+    el.src = getSilentWavUrl();
+    el.loop = true;
+    el.play().catch(() => {});
+    silentAudioElRef.current = el;
+
+    // Layer 2 — Web Audio oscillator
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    gain.gain.value = 0.001; // inaudible but non-zero so the browser doesn't optimise it away
+    gain.gain.value = 0.001; // inaudible but non-zero
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
     silentAudioRef.current = ctx;
   }, []);
+
+  // Pause/resume both keep-alive layers in sync with playback state.
+  useEffect(() => {
+    const ctx = silentAudioRef.current;
+    const el = silentAudioElRef.current;
+    if (!ctx && !el) return;
+    if (!videoId || paused) {
+      ctx?.suspend().catch(() => {});
+      el?.pause();
+    } else {
+      ctx?.resume().catch(() => {});
+      if (el?.paused) el.play().catch(() => {});
+    }
+  }, [videoId, paused]);
 
   // Init player
   useEffect(() => {
@@ -110,11 +167,20 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
             if (event.data === window.YT.PlayerState.ENDED) {
               setPaused(false);
               wasPlayingRef.current = false;
-              // Keep the media session alive ('paused' not 'none') so Brave doesn't
-              // aggressively suspend the page before the queue/advance fetch completes.
+              // Keep the media session alive ('paused' not 'none') so the browser
+              // doesn't aggressively suspend the page before the queue/advance fetch completes.
               if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
               onEndedRef.current?.();
             } else if (event.data === window.YT.PlayerState.PAUSED) {
+              if (document.hidden && wasPlayingRef.current) {
+                // The page is backgrounded and something paused us — either Chrome
+                // dispatching a MediaSession pause action or YouTube's own hide-detection.
+                // Resume immediately so background audio keeps flowing.
+                setTimeout(() => {
+                  try { playerRef.current?.playVideo(); } catch { /* ignore */ }
+                }, 300);
+                return;
+              }
               setPaused(true);
               if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
             } else if (event.data === window.YT.PlayerState.PLAYING) {
@@ -183,6 +249,10 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
       playerRef.current?.playVideo();
     });
     navigator.mediaSession.setActionHandler('pause', () => {
+      // When the page is hidden, this action is dispatched by the system (Chrome
+      // backgrounding / Android AudioFocus change), not by the user. Ignoring it
+      // keeps music playing through app switches.
+      if (document.hidden) return;
       playerRef.current?.pauseVideo();
     });
     // Prevent the next/previous buttons from doing anything unexpected
@@ -190,8 +260,9 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
     navigator.mediaSession.setActionHandler('previoustrack', null);
   }, [trackTitle, trackThumbnailUrl]);
 
-  // --- Page Visibility auto-resume ---
-  // If the browser still pauses playback when backgrounded, resume automatically on return.
+  // --- Page Visibility handler ---
+  // When the screen is unlocked / tab made visible, catch any state the player
+  // entered while the page was hidden.
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible' || !playerRef.current) return;
@@ -200,7 +271,7 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
         // Song ended while screen was locked — the ENDED event may not have fired
         // (browser throttles postMessage when hidden) so advance the queue now.
         wasPlayingRef.current = false;
-        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
         onEndedRef.current?.();
       }
     };
