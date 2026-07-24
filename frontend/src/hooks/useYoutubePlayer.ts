@@ -192,7 +192,15 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
   // If the browser still pauses playback when backgrounded, resume automatically on return.
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && wasPlayingRef.current && playerRef.current) {
+      if (document.visibilityState !== 'visible' || !playerRef.current) return;
+      const state = playerRef.current.getPlayerState();
+      if (state === window.YT.PlayerState.ENDED) {
+        // Song ended while screen was locked — the ENDED event may not have fired
+        // (browser throttles postMessage when hidden) so advance the queue now.
+        wasPlayingRef.current = false;
+        if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+        onEndedRef.current?.();
+      } else if (wasPlayingRef.current) {
         setTimeout(() => {
           try { playerRef.current?.playVideo(); } catch { /* ignore */ }
         }, 300);
