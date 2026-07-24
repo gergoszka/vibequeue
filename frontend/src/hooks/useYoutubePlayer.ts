@@ -110,7 +110,9 @@ export function useYoutubePlayer({ containerId, videoId, startedPlayingAt, track
             if (event.data === window.YT.PlayerState.ENDED) {
               setPaused(false);
               wasPlayingRef.current = false;
-              if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+              // Keep the media session alive ('paused' not 'none') so Brave doesn't
+              // aggressively suspend the page before the queue/advance fetch completes.
+              if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
               onEndedRef.current?.();
             } else if (event.data === window.YT.PlayerState.PAUSED) {
               setPaused(true);
